@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v130';
+  var APP_VERSION = 'v131';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -2502,13 +2502,16 @@
       var stTxt = due < 0.01 ? 'Paid' : (i.paid > 0 ? 'Part paid' : 'Unpaid');
       var stCls = due < 0.01 ? 'ok' : (i.paid > 0 ? 'warn' : 'due');
       var amtCls = due < 0.01 ? '' : ' due';
+      /* While money is still owed the row shows what is left to collect, not
+         the bill total, so nobody reads a part-paid bill as a full amount. */
+      var amtShown = due < 0.01 ? i.total : due;
       return `<div class="cust-row inv-row" data-act="inv-view" data-id="${i.id}" tabindex="0" role="button">
         <span class="cust-main">
           <span class="cust-name">${esc(i.no)}</span>
           <span class="cust-sub">${esc(c ? c.name : 'Walk-in customer')}</span>
         </span>
         <span class="inv-meta">
-          <span class="inv-amt${amtCls}">${money(i.total)}</span>
+          <span class="inv-amt${amtCls}">${money(amtShown)}</span>
           <span class="inv-subrow"><span class="inv-date">${esc(fmtDate(i.date))}</span>
             ${isEmiBill(i) ? '<span class="inv-st emi">EMI</span>' : ''}
             <span class="inv-st ${stCls}">${stTxt}</span></span>
@@ -4688,12 +4691,15 @@
       (t.lines || []).forEach(function (l) {
         if (l.itemId !== it.id) return;
         if (t.status === 'accepted') {
+          /* Each side belongs to its own branch only, so a branch's stock
+             history shows the movement that happened there (in at the
+             receiving branch, out at the sending one) instead of both. */
           ev.push({ date: t.date, created: (t.created||0)+1, type: 'Transfer in', ref: t.no,
-            branches: [t.from, t.to],
+            branches: [t.to],
             detail: 'From ' + branchName(t.from) + ' to ' + branchName(t.to),
             qty: Number(l.qty || 0), amt: '' });
           ev.push({ date: t.date, created: t.created||0, type: 'Transfer out', ref: t.no,
-            branches: [t.from, t.to],
+            branches: [t.from],
             detail: 'From ' + branchName(t.from) + ' to ' + branchName(t.to),
             qty: -Number(l.qty || 0), amt: '' });
         } else if (t.status === 'pending') {
