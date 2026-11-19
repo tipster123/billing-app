@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v123';
+  var APP_VERSION = 'v124';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -23,7 +23,8 @@
     itemOpen: '', itemMore: '', itemHist: 'all', itmAll: false, purchMenu: '', purchMore: 0, partyTab: 'customers', supMenu: '', supFilter: 'all',
     inv: { status: 'all', page: 1, per: 12 },
     rep: { from: '', to: '' }, bill: null, transfer: null,
-    settingsTab: 'company', scCharges: null, scTerms: null, scFields: null, pdf: null, previewStyle: ''
+    settingsTab: 'company', scCharges: null, scTerms: null, scFields: null, pdf: null, previewStyle: '',
+    expLink: { q: '', ids: [] }
   };
 
   var esc = S.esc, money = S.money, num = S.num, r2 = S.r2,
@@ -5829,18 +5830,69 @@
     return r2(Math.max(0, (Number(x && x.amount) || 0) - expPaidOf(x)));
   }
 
+  /* bills available to link to an expense — searched by bill number, customer
+     name or amount, so nobody has to scroll a list of every bill */
+  function expLinkBills(q) {
+    var term = String(q || '').trim().toLowerCase();
+    if (!term) return [];
+    return db.invoices.filter(function (i) { return i.branchId === ui.branch; }).filter(function (i) {
+      var c = findCust(i.customerId);
+      var hay = [i.no || '', c ? c.name : 'Walk-in', money(i.total), String(Number(i.total) || 0)].join(' ').toLowerCase();
+      return hay.indexOf(term) > -1;
+    }).sort(function (a, b) {
+      return String(b.date).localeCompare(String(a.date)) || (b.created || 0) - (a.created || 0);
+    }).slice(0, 8);
+  }
+  function expLinkHiddenHTML() {
+    var picked = (ui.expLink && ui.expLink.ids) || [];
+    return '<select id="expLinkSel" name="linkedBills" multiple hidden aria-hidden="true" tabindex="-1">' +
+      db.invoices.map(function (i) {
+        return '<option value="' + i.id + '"' + (picked.indexOf(i.id) > -1 ? ' selected' : '') + '>' + esc(i.no) + '</option>';
+      }).join('') + '</select>';
+  }
+  function expLinkChipsHTML() {
+    var picked = (ui.expLink && ui.expLink.ids) || [];
+    if (!picked.length) return '<div class="hint" style="margin:0">No bills linked yet.</div>';
+    return '<div class="fchips" style="margin:0">' + picked.map(function (id) {
+      var i = invById(id);
+      if (!i) return '';
+      var c = findCust(i.customerId);
+      return '<button type="button" class="fchip" data-act="exp-link-remove" data-id="' + i.id + '"' +
+        ' title="Remove this bill link"><span>' + esc(i.no) + ' · ' + esc(c ? c.name : 'Walk-in') + ' · ' + money(i.total) + '</span><b>\u00d7</b></button>';
+    }).join('') + '</div>';
+  }
+  function expLinkResultsHTML() {
+    var q = (ui.expLink && ui.expLink.q) || '';
+    if (!String(q).trim()) return '<div class="hint">Type a bill number or customer name to find a bill.</div>';
+    var hits = expLinkBills(q);
+    if (!hits.length) return '<div class="hint">No bill matches \u201c' + esc(q) + '\u201d.</div>';
+    var picked = (ui.expLink && ui.expLink.ids) || [];
+    return hits.map(function (i) {
+      var c = findCust(i.customerId);
+      var on = picked.indexOf(i.id) > -1;
+      return '<button type="button" class="dash-row" data-act="exp-link-add" data-id="' + i.id + '"' + (on ? ' disabled' : '') + '>' +
+        '<span class="grow"><b>' + esc(i.no) + ' \u00b7 ' + esc(c ? c.name : 'Walk-in') + '</b>' +
+        '<span class="sub">' + esc(fmtDate(i.date)) + ' \u00b7 ' + money(i.total) + '</span></span>' +
+        '<span class="val">' + (on ? 'Linked' : '+ Link') + '</span></button>';
+    }).join('');
+  }
+  function expLinkRepaint() {
+    var chips = document.getElementById('expLinkChips');
+    if (chips) chips.innerHTML = expLinkChipsHTML();
+    var res = document.getElementById('expLinkResults');
+    if (res) res.innerHTML = expLinkResultsHTML();
+    var sel = document.getElementById('expLinkSel');
+    if (sel) sel.outerHTML = expLinkHiddenHTML();
+  }
+
   function expenseModal(id) {
     var x = id ? db.expenses.filter(function (e) { return e.id === id; })[0] : null;
     var amt = x ? Number(x.amount) || 0 : 0;
     var isPaid = x ? expDueOf(x) <= 0.009 : true;
     var balNow = isPaid ? 0 : (x ? expDueOf(x) : amt);
-    var linkedSel = (x && x.linkedBills) || [];
-    var billOpts = db.invoices.filter(function (i) { return i.branchId === ui.branch; })
-      .sort(function (a, b) { return String(b.date).localeCompare(String(a.date)) || (b.created || 0) - (a.created || 0); })
-      .slice(0, 40).map(function (i) {
-        var c = findCust(i.customerId);
-        return `<option value="${i.id}"${linkedSel.indexOf(i.id) > -1 ? ' selected' : ''}>${esc(i.no)} · ${esc(c ? c.name : 'Walk-in')} · ${money(i.total)}</option>`;
-      }).join('');
+    var linkedSel = (x && x.linkedBills ? x.linkedBills.slice() : []);
+    ui.expLink = { q: '', ids: linkedSel };
+    var hasBills = db.invoices.some(function (i) { return i.branchId === ui.branch; });
     openModal(x ? 'Edit expense' : 'Add expense', `<form data-form="expense">
       <input type="hidden" name="id" value="${x ? x.id : ''}">
       <div class="grid2">
@@ -5862,8 +5914,12 @@
       <div class="field"><label>Note</label><input class="inp" name="note" value="${esc(x ? x.note : '')}" placeholder="What was this for?"></div>
       <details style="margin:2px 0 10px"${linkedSel.length ? ' open' : ''}>
         <summary style="cursor:pointer;font-weight:600;font-size:13px">Link this expense to bills (optional)</summary>
-        <div class="hint" style="margin:6px 0 8px">Pick the bills this cost belongs to — transport for two orders, for example. The amount is split across them by bill value, so profit per bill and on each customer's ledger includes its share. Use Ctrl (or Cmd) to pick more than one.</div>
-        ${billOpts ? `<select class="inp" name="linkedBills" multiple size="4" aria-label="Bills to link">${billOpts}</select>` : '<div class="hint">No bills in this branch yet.</div>'}
+        <div class="hint" style="margin:6px 0 8px">Search a bill by number or customer name and tap it to link — transport for two orders, for example. The amount is split across the linked bills by bill value, so profit per bill and on each customer's ledger includes its share.</div>
+        ${hasBills ? `
+        <input class="inp" data-input="exp-bill-q" placeholder="Search bill no., customer name or amount" value="${esc(ui.expLink.q)}" autocomplete="off" aria-label="Search bills to link">
+        <div id="expLinkChips" style="margin-top:8px">${expLinkChipsHTML()}</div>
+        <div id="expLinkResults" style="margin-top:6px">${expLinkResultsHTML()}</div>
+        ${expLinkHiddenHTML()}` : '<div class="hint">No bills in this branch yet.</div>'}
       </details>
       <div class="hint">Recorded against ${esc(branchName(ui.branch))}. Tick “Paid” if you have already paid this expense. Leave it unticked and the whole amount is kept as balance to pay.</div>
       <div class="row-actions" style="justify-content:flex-end;margin-top:16px">
@@ -7980,6 +8036,19 @@
       return toast('Customer deleted', { undo: { label: 'Customer restored', run: function () { db.customers.push(cSnap); } } });
     }
 
+    if (action === 'exp-link-add') {
+      if (!ui.expLink) return;
+      if (ui.expLink.ids.indexOf(id) < 0) ui.expLink.ids.push(id);
+      expLinkRepaint();
+      return;
+    }
+    if (action === 'exp-link-remove') {
+      if (!ui.expLink) return;
+      ui.expLink.ids = ui.expLink.ids.filter(function (v) { return v !== id; });
+      expLinkRepaint();
+      return;
+    }
+
     if (action === 'exp-new') { ui.expMore = ''; return expenseModal(null); }
     if (action === 'exp-edit') { ui.expMore = ''; return expenseModal(id); }
     if (action === 'exp-del') {
@@ -9064,6 +9133,13 @@
     if (kind === 'adj-counted') { adjStockPreview(); return; }
     if (kind === 'exp-amount') {
       updateExpBalHint();
+      return;
+    }
+    if (kind === 'exp-bill-q') {
+      if (!ui.expLink) ui.expLink = { q: '', ids: [] };
+      ui.expLink.q = el.value;
+      var res = document.getElementById('expLinkResults');
+      if (res) res.innerHTML = expLinkResultsHTML();
       return;
     }
     if (kind === 'pay-amount' && el.getAttribute('data-id') == null) {
