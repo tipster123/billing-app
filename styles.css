@@ -1544,6 +1544,30 @@ html[data-theme="dark"] .itm-adjust-btn:hover{color:#08130c}
   .itm-head-actions .itm-head-btn{flex:1}
 }
 
+/* ---- EOD report: tighter layout on small screens only ---- */
+@media (max-width:640px){
+  .eod{gap:5px !important}
+  .eod-top{gap:6px !important}
+  .eod-top .sub{font-size:11px;line-height:1.2}
+  .eod-top .btn.sm{padding:4px 8px;font-size:11px;min-height:28px}
+  .eod-kpis{gap:4px !important}
+  .eod-kpi{padding:5px 7px !important;border-radius:8px}
+  .eod-kpi .k{font-size:9px;letter-spacing:.05em}
+  .eod-kpi .v{font-size:14px !important;margin-top:2px}
+  .eod-cash{padding:6px 8px !important;border-radius:8px}
+  .eod-cash .k{font-size:10px}
+  .eod-cash .v{font-size:16px !important;margin-top:2px}
+  .eod-cash .sub{font-size:9.5px;margin-top:1px}
+  .eod-methods{padding:6px 8px !important;border-radius:8px}
+  .eod-methods .k{font-size:9.5px}
+  .eod-methods .row-between{font-size:11px !important;padding:1px 0 !important}
+  .eod-title{font-size:10px !important;letter-spacing:.05em;padding-top:1px}
+  .eod-table table.data{font-size:10px !important;line-height:1.2 !important;min-width:400px}
+  .eod-table table.data th,.eod-table table.data td{padding:3px 5px !important;white-space:nowrap}
+  .eod-table table.data th{font-size:9px}
+  .eod-table table.data td .sub{font-size:8.5px !important;margin-top:0 !important}
+}
+
 /* ---- invoice print settings (compact) ---- */
 .pset-card{padding:12px 14px}
 .pset-head{font-weight:700;font-size:13px;color:#334155;background:#eaf4fb;margin:-12px -14px 10px;padding:8px 12px;border-radius:10px 10px 0 0}

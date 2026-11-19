@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v134';
+  var APP_VERSION = 'v135';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -8606,7 +8606,7 @@
         '<td class="num" style="padding:4px 6px">' + money(r.cash) + '</td><td class="num" style="padding:4px 6px">' + money(r.online) + '</td></tr>';
     }).join('') : '<tr><td colspan="7" class="sub" style="padding:6px">No invoices today.</td></tr>';
     var methodList = (d.byMethod || []).length
-      ? '<div class="kpi" style="padding:8px 10px"><div class="k">Collected by method</div>' +
+      ? '<div class="kpi eod-methods" style="padding:8px 10px"><div class="k">Collected by method</div>' +
         d.byMethod.map(function (m) {
           return '<div class="row-between" style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:2px 0">' +
             '<span>' + esc(m.method) + '</span><b>' + money(m.amount) + '</b></div>';
@@ -8615,27 +8615,27 @@
     var expRows = d.exps.length ? d.exps.map(function (e) {
       return '<tr><td style="padding:4px 6px"><b>' + esc(e.cat) + '</b><div class="sub" style="font-size:10px;margin-top:1px">' + esc(e.note || '—') + '</div></td><td style="padding:4px 6px">' + esc(e.method || '—') + '</td><td class="num" style="padding:4px 6px">' + money(e.amt) + '</td><td class="num" style="padding:4px 6px">' + money(e.paid) + '</td><td class="num" style="padding:4px 6px">' + (e.bal > 0.009 ? money(e.bal) : '—') + '</td></tr>';
     }).join('') : '<tr><td colspan="5" class="sub" style="padding:6px">No expenses today.</td></tr>';
-    return '<div style="display:flex;flex-direction:column;gap:8px">' +
-      '<div class="row-actions" style="justify-content:space-between;align-items:center;gap:8px">' +
+    return '<div class="eod" style="display:flex;flex-direction:column;gap:8px">' +
+      '<div class="row-actions eod-top" style="justify-content:space-between;align-items:center;gap:8px">' +
         '<div class="sub">' + esc(d.branch) + ' · ' + esc(fmtDate(d.date)) + '</div>' +
         '<button class="btn sm primary" data-act="eod-wa">Share on WhatsApp</button>' +
       '</div>' +
-      '<div class="kpi-grid" style="grid-template-columns:repeat(2,minmax(0,1fr));gap:6px">' +
-        '<div class="kpi" style="padding:8px 10px"><div class="k">Cash received</div><div class="v" style="font-size:17px">' + money(d.totCash) + '</div></div>' +
-        '<div class="kpi" style="padding:8px 10px"><div class="k">Online received</div><div class="v" style="font-size:17px">' + money(d.totOnline) + '</div></div>' +
-        '<div class="kpi" style="padding:8px 10px"><div class="k">Total received</div><div class="v" style="font-size:17px">' + money(d.totRecv) + '</div></div>' +
-        '<div class="kpi" style="padding:8px 10px"><div class="k">Total expense</div><div class="v bad" style="font-size:17px">' + money(d.totExp) + '</div></div>' +
+      '<div class="kpi-grid eod-kpis" style="grid-template-columns:repeat(2,minmax(0,1fr));gap:6px">' +
+        '<div class="kpi eod-kpi" style="padding:8px 10px"><div class="k">Cash received</div><div class="v" style="font-size:17px">' + money(d.totCash) + '</div></div>' +
+        '<div class="kpi eod-kpi" style="padding:8px 10px"><div class="k">Online received</div><div class="v" style="font-size:17px">' + money(d.totOnline) + '</div></div>' +
+        '<div class="kpi eod-kpi" style="padding:8px 10px"><div class="k">Total received</div><div class="v" style="font-size:17px">' + money(d.totRecv) + '</div></div>' +
+        '<div class="kpi eod-kpi" style="padding:8px 10px"><div class="k">Total expense</div><div class="v bad" style="font-size:17px">' + money(d.totExp) + '</div></div>' +
       '</div>' +
-      '<div class="kpi" style="padding:8px 10px">' +
+      '<div class="kpi eod-cash" style="padding:8px 10px">' +
         '<div class="k">Final Total Cash in Hand</div>' +
         '<div class="v" style="font-size:20px;font-weight:800">' + money(d.cashInHand) + '</div>' +
         '<div class="sub">Cash received minus cash expenses</div>' +
       '</div>' +
       methodList +
-      '<div class="section-title" style="margin:0;font-size:11px">Today\'s invoices</div>' +
-      '<div class="table-wrap" style="margin:0"><table class="data" style="font-size:11px;line-height:1.25"><thead><tr><th style="padding:4px 6px">Invoice / Customer</th><th style="padding:4px 6px">Product</th><th class="num" style="padding:4px 6px">Qty</th><th class="num" style="padding:4px 6px">Received</th><th style="padding:4px 6px">Payments</th><th class="num" style="padding:4px 6px">Cash</th><th class="num" style="padding:4px 6px">Online</th></tr></thead><tbody>' + invRows + '</tbody></table></div>' +
-      '<div class="section-title" style="margin:0;font-size:11px">Today\'s expenses</div>' +
-      '<div class="table-wrap" style="margin:0"><table class="data" style="font-size:11px;line-height:1.25"><thead><tr><th style="padding:4px 6px">Category / Note</th><th style="padding:4px 6px">Method</th><th class="num" style="padding:4px 6px">Amount</th><th class="num" style="padding:4px 6px">Paid</th><th class="num" style="padding:4px 6px">Balance</th></tr></thead><tbody>' + expRows + '</tbody></table></div>' +
+      '<div class="section-title eod-title" style="margin:0;font-size:11px">Today\'s invoices</div>' +
+      '<div class="table-wrap eod-table" style="margin:0"><table class="data" style="font-size:11px;line-height:1.25"><thead><tr><th style="padding:4px 6px">Invoice / Customer</th><th style="padding:4px 6px">Product</th><th class="num" style="padding:4px 6px">Qty</th><th class="num" style="padding:4px 6px">Received</th><th style="padding:4px 6px">Payments</th><th class="num" style="padding:4px 6px">Cash</th><th class="num" style="padding:4px 6px">Online</th></tr></thead><tbody>' + invRows + '</tbody></table></div>' +
+      '<div class="section-title eod-title" style="margin:0;font-size:11px">Today\'s expenses</div>' +
+      '<div class="table-wrap eod-table" style="margin:0"><table class="data" style="font-size:11px;line-height:1.25"><thead><tr><th style="padding:4px 6px">Category / Note</th><th style="padding:4px 6px">Method</th><th class="num" style="padding:4px 6px">Amount</th><th class="num" style="padding:4px 6px">Paid</th><th class="num" style="padding:4px 6px">Balance</th></tr></thead><tbody>' + expRows + '</tbody></table></div>' +
     '</div>';
   }
 
