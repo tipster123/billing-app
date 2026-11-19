@@ -1325,6 +1325,25 @@ html[data-theme="dark"] #pSheetHost .sheet-search .inp {
   }
   .dash-goal-top b{color:var(--text);font-variant-numeric:tabular-nums}
 
+  /* every target as one tight row on a single card */
+  .dash-targets{padding:4px 12px}
+  .dash-targets .trow{
+    display:grid;grid-template-columns:minmax(0,1fr) auto auto;
+    align-items:center;gap:0 8px;padding:7px 0;border-top:1px solid var(--line-soft);
+  }
+  .dash-targets .trow:first-child{border-top:0}
+  .dash-targets .tl{
+    font-size:12px;font-weight:600;min-width:0;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .dash-targets .tv{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .dash-targets .tp{font-size:11.5px;font-weight:700;font-variant-numeric:tabular-nums}
+  .dash-targets .tbar{
+    grid-column:1/-1;height:4px;margin-top:5px;
+    border-radius:999px;background:var(--line);overflow:hidden;
+  }
+  .dash-targets .tbar > span{display:block;height:100%;border-radius:999px;background:var(--brand)}
+
   /* section heads */
   .dash-sec{
     display:flex;align-items:center;justify-content:space-between;gap:10px;

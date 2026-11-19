@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v122';
+  var APP_VERSION = 'v123';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -1334,30 +1334,29 @@
             '<span class="dash-go">\u203a</span></button></div>') +
         '</div>';
     };
-    sec.target = function(){
-      if (myTarget <= 0) return '';
-      return '<div class="dash-goal">' +
-        '<div class="dash-goal-top"><span>My target \u00b7 ' + money(mySales) + ' of ' + money(myTarget) + '</span><b>' + myPct + '%</b></div>' +
-        '<div class="bar"><span style="width:' + myPct + '%"></span></div></div>';
-    };
-    var goalBar = function(label, got, target){
+    /* every target on one compact card — the personal target and each branch
+       target, so the dashboard no longer shows a separate card per target */
+    var goalRow = function(label, got, target){
       var pc = targetPct(got, target);
-      return '<div class="dash-goal">' +
-        '<div class="dash-goal-top"><span>' + esc(label) + ' \u00b7 ' + money(got) + ' of ' + money(target) + '</span><b>' + pc + '%</b></div>' +
-        '<div class="bar"><span style="width:' + Math.min(100, pc) + '%"></span></div></div>';
+      return '<div class="trow">' +
+        '<span class="tl">' + esc(label) + '</span>' +
+        '<span class="tv">' + money(got) + ' / ' + money(target) + '</span>' +
+        '<b class="tp">' + pc + '%</b>' +
+        '<span class="tbar"><span style="width:' + Math.min(100, pc) + '%"></span></span></div>';
     };
     sec.btargets = function(){
       var showProfit = can('profit.view');
-      var bars = '';
+      var rows = '';
+      if (myTarget > 0) rows += goalRow('My target', mySales, myTarget);
       S.visibleBranches().forEach(function (b) {
         var tg = branchTarget(b.id);
         if (!tg.sales && !(tg.profit && showProfit)) return;
         var st = branchMonthStats(b.id);
-        if (tg.sales) bars += goalBar(b.name + ' \u00b7 Sales', st.sales, tg.sales);
-        if (tg.profit && showProfit) bars += goalBar(b.name + ' \u00b7 Profit', st.profit, tg.profit);
+        if (tg.sales) rows += goalRow(b.name, st.sales, tg.sales);
+        if (tg.profit && showProfit) rows += goalRow(b.name + ' \u00b7 profit', st.profit, tg.profit);
       });
-      if (!bars) return '';
-      return secHead('Targets \u00b7 this month') + bars;
+      if (!rows) return '';
+      return secHead('Targets \u00b7 this month') + '<div class="dash-goal dash-targets">' + rows + '</div>';
     };
     sec.attention = function(){
       var rows = '';
@@ -5471,6 +5470,19 @@
             <div class="amt"><button class="btn sm" data-act="branch-edit" data-id="${b.id}">Edit</button>
             <button class="btn sm danger" data-act="branch-del" data-id="${b.id}">Delete</button></div></div>`;
         }).join('')}</div>
+        ${S.isOwner() ? `<form data-form="branch-targets" style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
+          <div class="sub" style="margin-bottom:10px">Monthly targets for each branch, measured against this month's sales. Staff see the sales target; the profit target is yours only. Profit is what is left after cost, expenses and damage. Leave a box empty for no target.</div>
+          ${db.branches.map(function (b) {
+            var tg = branchTarget(b.id);
+            return `<div class="grid2" style="align-items:end;margin-bottom:8px">
+              <div class="field"><label>${esc(b.name)} · Sales target</label>
+                <input class="inp" type="number" min="0" step="1" name="sales_${b.id}" value="${tg.sales || ''}" placeholder="0" autocomplete="off"></div>
+              <div class="field"><label>Profit target</label>
+                <input class="inp" type="number" min="0" step="1" name="profit_${b.id}" value="${tg.profit || ''}" placeholder="0" autocomplete="off"></div>
+            </div>`;
+          }).join('')}
+          <div class="row-actions" style="justify-content:flex-end"><button class="btn primary" type="submit">Save targets</button></div>
+        </form>` : ''}
         <div class="row-actions" style="margin-top:12px"><button class="btn" data-act="branch-add">+ Add branch</button></div>
       </div>
 
@@ -5480,22 +5492,6 @@
           <button class="btn" data-act="backup">Download backup</button>
           <label class="btn" style="cursor:pointer">Restore backup<input type="file" accept="application/json,.json" data-change="restore" hidden></label>
         </div></div>
-
-      ${S.isOwner() ? `<div class="card"><h3>Branch targets</h3>
-        <div class="sub" style="margin-bottom:12px">Monthly targets for each branch, measured against this month's sales. Staff see the sales target; the profit target is yours only. Profit is what is left after cost, expenses and damage.</div>
-        <form data-form="branch-targets">
-          ${db.branches.map(function (b) {
-            var tg = branchTarget(b.id);
-            return `<div class="grid2" style="align-items:end;margin-bottom:10px">
-              <div class="field"><label>${esc(b.name)} · Sales target</label>
-                <input class="inp" type="number" min="0" step="1" name="sales_${b.id}" value="${tg.sales || ''}" placeholder="0" autocomplete="off"></div>
-              <div class="field"><label>Profit target</label>
-                <input class="inp" type="number" min="0" step="1" name="profit_${b.id}" value="${tg.profit || ''}" placeholder="0" autocomplete="off"></div>
-            </div>`;
-          }).join('')}
-          <div class="row-actions" style="justify-content:flex-end"><button class="btn primary" type="submit">Save targets</button></div>
-        </form>
-      </div>` : ''}
 
       <div class="card"><h3>App version</h3>
         <div class="sub" style="margin-bottom:10px">The copy of the app running on this device. Mention this if something looks wrong.</div>
