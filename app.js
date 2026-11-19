@@ -6,6 +6,12 @@
   'use strict';
 
   var S = window.Store;
+  /* Which copy of the app is running. APP_VERSION only changes when the app
+     files change (keep it in step with VERSION in sw.js and the ?v= strings in
+     index.html); APP_BRANCH is the git branch this build came from. */
+  var APP_VERSION = 'v118';
+  var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
+
   var db = null;
   var ui = {
     tab: 'dashboard', branch: '',
@@ -5322,6 +5328,18 @@
           <button class="btn" data-act="backup">Download backup</button>
           <label class="btn" style="cursor:pointer">Restore backup<input type="file" accept="application/json,.json" data-change="restore" hidden></label>
         </div></div>
+
+      <div class="card"><h3>App version</h3>
+        <div class="sub" style="margin-bottom:10px">The copy of the app running on this device. Mention this if something looks wrong.</div>
+        <div class="row-list">
+          <div class="rrow"><div class="grow"><div class="title">Version</div>
+            <div class="sub">Bill &amp; Inventory build ${esc(APP_VERSION)}</div></div>
+            <div class="amt"><span class="badge">${esc(APP_VERSION)}</span></div></div>
+          <div class="rrow"><div class="grow"><div class="title">Code branch</div>
+            <div class="sub">${esc(APP_BRANCH)}${APP_BRANCH === 'main' ? ' · released build' : ' · test build, not main'}</div></div>
+            <div class="amt"><span class="badge${APP_BRANCH === 'main' ? ' ok' : ' warn'}">${APP_BRANCH === 'main' ? 'main' : 'branch'}</span></div></div>
+        </div>
+      </div>
 
       ${S.isOwner() ? `<div class="card"><h3>Download or delete all data</h3>
         <div class="sub" style="margin-bottom:12px">Download saves everything as one CSV file — bills, stock, customers, suppliers, purchases, returns, transfers, damage, expenses, staff entries, complaints and the activity log — for your accountant or your own records. Delete removes those records from this device and from Supabase. Your shop details, branches and staff logins stay.</div>
