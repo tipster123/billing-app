@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v127';
+  var APP_VERSION = 'v128';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -5988,7 +5988,7 @@
         <div class="field"><label>Full name</label><input class="inp" name="name" required value="${esc(s ? s.name : '')}"></div>
         <div class="field"><label>Role</label><select class="inp" name="role" data-change="staff-role">
           ${['owner', 'manager', 'cashier'].map(function (r) {
-            return `<option value="${r}"${s && s.role === r ? ' selected' : ''}>${S.ROLE_LABEL[r]}</option>`;
+            return `<option value="${r}"${(s ? s.role : 'cashier') === r ? ' selected' : ''}>${S.ROLE_LABEL[r]}</option>`;
           }).join('')}</select></div>
       </div>
       <div class="grid2">
@@ -8690,6 +8690,9 @@
         name: sname, username: uname, password: pass,
         role: data.role || 'cashier', branchId: mainBranch, branchIds: branchIds,
         active: !!data.active, perms: perms,
+        /* the ticked boxes are the whole truth from now on — without this the
+           old-permission upgrade would tick entry/delete again on next load */
+        permsSplit: true,
         target: Math.max(0, Number(data.target) || 0)
       };
       if (data.id) {
