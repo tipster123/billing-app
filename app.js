@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v132';
+  var APP_VERSION = 'v133';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -4798,12 +4798,18 @@
     });
     var chips = [['all','All'],['sale','Sales'],['purchase','Purchases'],['damage','Damage'],['transfer','Transfers']];
     return `<div class="cust-page itm-page">
-      <div class="cd-head">
-        <button type="button" class="btn" data-act="item-back">← Back</button>
+      <div class="itm-detail-head">
+        <button type="button" class="itm-head-btn itm-back-btn" data-act="item-back" aria-label="Back to items">
+          <span class="itm-head-ic" aria-hidden="true">←</span><span>Back</span>
+        </button>
         <div class="grow"></div>
-        <div class="row-actions">
-          <button type="button" class="btn sm" data-act="item-edit" data-id="${it.id}">Edit</button>
-          <button type="button" class="btn sm" data-act="item-adjust" data-id="${it.id}">Adjust</button>
+        <div class="itm-head-actions">
+          <button type="button" class="itm-head-btn itm-edit-btn" data-act="item-edit" data-id="${it.id}">
+            <span class="itm-head-ic" aria-hidden="true">✎</span><span>Edit</span>
+          </button>
+          <button type="button" class="itm-head-btn itm-adjust-btn" data-act="item-adjust" data-id="${it.id}">
+            <span class="itm-head-ic" aria-hidden="true">±</span><span>Adjust</span>
+          </button>
         </div>
       </div>
       <div class="grid2" style="margin:10px 0">
