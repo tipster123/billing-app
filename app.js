@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v131';
+  var APP_VERSION = 'v132';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -4637,74 +4637,98 @@
     }).join('')}</div>`;
   }
 
+  /* Sortable time for a movement: the stored timestamp, or the date at midnight. */
+  function evTime(date, created) {
+    var t = Number(created) || 0;
+    if (t) return t;
+    var p = Date.parse(String(date || '') + 'T00:00:00');
+    return isNaN(p) ? 0 : p;
+  }
+
   function itemHistory(it) {
     var ev = [];
     (db.invoices || []).forEach(function (inv) {
       (inv.lines || []).forEach(function (l) {
         if (l.itemId !== it.id) return;
         var c = findCust(inv.customerId);
-        ev.push({ date: inv.date, created: inv.created || 0, type: 'Sale', ref: inv.no,
-          branches: [inv.branchId],
+        var q = Number(l.qty || 0);
+        ev.push({ date: inv.date, created: inv.created || 0, at: evTime(inv.date, inv.created), type: 'Sale', ref: inv.no,
+          branches: [inv.branchId], moves: [{ branch: inv.branchId, delta: -q }],
           detail: (c ? c.name : 'Walk-in') + ' · ' + branchName(inv.branchId),
-          qty: -Number(l.qty || 0), amt: money((Number(l.qty)||0) * (Number(l.price)||0)) });
+          qty: -q, amt: money(q * (Number(l.price)||0)) });
       });
     });
     (db.sreturns || []).forEach(function (r) {
       (r.lines || []).forEach(function (l) {
         if (l.itemId !== it.id) return;
         var c = findCust(r.customerId);
-        ev.push({ date: r.date, created: r.created || 0, type: 'Sale return', ref: r.no,
-          branches: [r.branchId],
+        var q = Number(l.qty || 0);
+        ev.push({ date: r.date, created: r.created || 0, at: evTime(r.date, r.created), type: 'Sale return', ref: r.no,
+          branches: [r.branchId], moves: [{ branch: r.branchId, delta: q }],
           detail: (c ? c.name : 'Walk-in') + ' · ' + branchName(r.branchId),
-          qty: Number(l.qty || 0), amt: money((Number(l.qty)||0) * (Number(l.price)||0)) });
+          qty: q, amt: money(q * (Number(l.price)||0)) });
       });
     });
     (db.purchases || []).forEach(function (p) {
+      var pending = (typeof purchaseStatus === 'function') && purchaseStatus(p) === 'pending';
       (p.lines || []).forEach(function (l) {
         if (l.itemId !== it.id) return;
         var sup = supplierById(p.supplierId);
-        ev.push({ date: p.date, created: p.created || 0, type: 'Purchase', ref: p.no, pid: p.id,
-          branches: [p.branchId],
-          detail: (sup ? sup.name : 'Supplier'),
-          qty: Number(l.qty || 0), amt: money((Number(l.qty)||0) * (Number(l.cost)||0)) });
+        var q = Number(l.qty || 0);
+        /* Stock only lands on approval. Older records may have no per-branch alloc. */
+        var alloc = (l.alloc && Object.keys(l.alloc).length) ? l.alloc
+          : (p.branchId ? (function () { var o = {}; o[p.branchId] = q; return o; })() : {});
+        var moves = [], brs = [];
+        if (!pending) Object.keys(alloc).forEach(function (b) {
+          moves.push({ branch: b, delta: Number(alloc[b]) || 0 }); brs.push(b);
+        });
+        ev.push({ date: p.date, created: p.created || 0, at: evTime(p.date, p.created), type: 'Purchase', ref: p.no, pid: p.id,
+          branches: brs.length ? brs : [p.branchId], moves: moves,
+          detail: (sup ? sup.name : 'Supplier') + (pending ? ' · waiting for approval' : ''),
+          qty: q, amt: money(q * (Number(l.cost)||0)), pending: pending });
       });
     });
     (db.preturns || []).forEach(function (r) {
       if (r.itemId !== it.id) return;
       var sup = supplierById(r.supplierId);
-      ev.push({ date: r.date, created: r.created || 0, type: 'Purchase return', ref: r.no,
+      var q = Number(r.qty || 0);
+      ev.push({ date: r.date, created: r.created || 0, at: evTime(r.date, r.created), type: 'Purchase return', ref: r.no,
+        branches: [r.branchId], moves: [{ branch: r.branchId, delta: -q }],
         detail: (sup ? sup.name : 'Supplier') + ' · ' + branchName(r.branchId),
-        qty: -Number(r.qty || 0), amt: money(Number(r.total || 0)) });
+        qty: -q, amt: money(Number(r.total || 0)) });
     });
     (db.damages || []).forEach(function (d) {
       if (d.itemId !== it.id) return;
       var moved = (d.stockMoved != null) ? (Number(d.stockMoved) || 0) : (d.adjusted ? -Number(d.qty || 0) : 0);
-      ev.push({ date: d.date, created: d.created || 0,
+      ev.push({ date: d.date, created: d.created || 0, at: evTime(d.date, d.created),
         type: d.adjust ? 'Stock adjustment' : (d.adjusted ? 'Damage (adjusted)' : 'Damage (pending)'),
         ref: d.reason || 'Damage', branches: [d.branchId],
+        moves: moved ? [{ branch: d.branchId, delta: moved }] : [],
         detail: branchName(d.branchId) + (moved ? (moved < 0 ? ' · stock reduced' : ' · stock added') : (d.adjusted ? '' : ' · not adjusted yet')),
         qty: moved, amt: money(Number(d.costValue || 0)),
         note: d.adjusted ? '' : (num(d.qty) + ' recorded') });
     });
     (db.transfers || []).forEach(function (t) {
       if (t.status === 'rejected') return;
+      var movedAt = Number(t.acceptedAt) || evTime(t.date, t.created);
       (t.lines || []).forEach(function (l) {
         if (l.itemId !== it.id) return;
+        var q = Number(l.qty || 0);
         if (t.status === 'accepted') {
           /* Each side belongs to its own branch only, so a branch's stock
              history shows the movement that happened there (in at the
              receiving branch, out at the sending one) instead of both. */
-          ev.push({ date: t.date, created: (t.created||0)+1, type: 'Transfer in', ref: t.no,
-            branches: [t.to],
+          ev.push({ date: t.date, created: (t.created||0)+1, at: movedAt + 1, type: 'Transfer in', ref: t.no, trId: t.id,
+            branches: [t.to], moves: [{ branch: t.to, delta: q }],
             detail: 'From ' + branchName(t.from) + ' to ' + branchName(t.to),
-            qty: Number(l.qty || 0), amt: '' });
-          ev.push({ date: t.date, created: t.created||0, type: 'Transfer out', ref: t.no,
-            branches: [t.from],
+            qty: q, amt: '' });
+          ev.push({ date: t.date, created: t.created||0, at: movedAt, type: 'Transfer out', ref: t.no, trId: t.id,
+            branches: [t.from], moves: [{ branch: t.from, delta: -q }],
             detail: 'From ' + branchName(t.from) + ' to ' + branchName(t.to),
-            qty: -Number(l.qty || 0), amt: '' });
+            qty: -q, amt: '' });
         } else if (t.status === 'pending') {
-          ev.push({ date: t.date, created: t.created||0, type: 'Transfer (pending)', ref: t.no,
-            branches: [t.from, t.to],
+          ev.push({ date: t.date, created: t.created||0, at: movedAt, type: 'Transfer (pending)', ref: t.no, trId: t.id,
+            branches: [t.from, t.to], moves: [], pendingQty: q,
             detail: 'From ' + branchName(t.from) + ' to ' + branchName(t.to),
             qty: 0, amt: '', note: num(l.qty) + ' requested' });
         }
@@ -4714,13 +4738,54 @@
     return ev;
   }
 
+  /* Replays the item's stock movements oldest→newest and attaches the
+     quantity held before and after each one. The balance is anchored on the
+     stock held today, so the numbers always reconcile with the item page. */
+  function applyStockFlow(it, events) {
+    var net = {}, opening = {}, bal = {};
+    db.branches.forEach(function (b) { net[b.id] = 0; });
+    (events || []).forEach(function (e) {
+      (e.moves || []).forEach(function (m) {
+        net[m.branch] = r2((net[m.branch] || 0) + (Number(m.delta) || 0));
+      });
+    });
+    db.branches.forEach(function (b) {
+      opening[b.id] = r2(S.stockOf(it, b.id) - (net[b.id] || 0));
+      bal[b.id] = opening[b.id];
+    });
+    (events || []).slice().sort(function (a, b) { return (a.at || 0) - (b.at || 0); })
+      .forEach(function (e) {
+        if (!e.moves || !e.moves.length) return;
+        e.flow = {};
+        e.moves.forEach(function (m) {
+          var before = (bal[m.branch] == null) ? 0 : bal[m.branch];
+          var after = r2(before + (Number(m.delta) || 0));
+          if (e.flow[m.branch]) e.flow[m.branch].after = after;
+          else e.flow[m.branch] = { before: before, after: after };
+          bal[m.branch] = after;
+        });
+      });
+    return events || [];
+  }
+
+  /* "12 → 9" for the branches this row affects, labelled when needed. */
+  function flowText(flow, branchIds, forceLabel) {
+    if (!flow) return '';
+    var keys = Object.keys(flow).filter(function (b) { return branchIds.indexOf(b) >= 0; });
+    return keys.map(function (b) {
+      var fl = flow[b];
+      var label = (forceLabel || keys.length > 1) ? esc(branchName(b)) + ' stock ' : '';
+      return label + num(fl.before) + ' → ' + num(fl.after);
+    }).join(' · ');
+  }
+
   function viewItemDetail(it) {
     var showCost = can('profit.view');
     var scopeAll = itmAllOn();
     var here = scopeAll ? S.totalStock(it) : stockOf(it), all = S.totalStock(it), re = Number(it.reorder) || 0;
     var low = here <= re, out = here <= 0;
     var f = ui.itemHist || 'all';
-    var hist = itemHistory(it).filter(function (e) {
+    var hist = applyStockFlow(it, itemHistory(it)).filter(function (e) {
       return scopeAll || !e.branches || e.branches.indexOf(ui.branch) >= 0;
     });
     var histF = hist.filter(function (e) {
@@ -4775,10 +4840,26 @@
         if (scopeAll && e.type === 'Purchase' && e.branches && e.branches[0]) subBits.push(esc(branchName(e.branches[0])));
         if (e.detail) subBits.push(esc(e.detail));
         e.sub = subBits.join(' · ');
+        /* Show the stock this movement started from and left behind, so a
+           transfer or a stock inward reads as "12 → 9" not just "-3". */
+        var showFlow = e.type === 'Transfer in' || e.type === 'Transfer out' ||
+          e.type === 'Purchase' || e.type === 'Purchase return';
+        var flTxt = showFlow ? flowText(e.flow, scopeAll ? (e.branches || []) : [ui.branch], true) : '';
+        if (e.type === 'Transfer (pending)') {
+          var pt = db.transfers.filter(function (x) { return x.id === e.trId; })[0];
+          if (pt && S.branchById(pt.from) && S.branchById(pt.to)) {
+            var pq = Number(e.pendingQty) || 0, pf = S.stockOf(it, pt.from), pto = S.stockOf(it, pt.to);
+            e.flow = {};
+            e.flow[pt.from] = { before: pf, after: r2(pf - pq) };
+            e.flow[pt.to] = { before: pto, after: r2(pto + pq) };
+            flTxt = flowText(e.flow, scopeAll ? [pt.from, pt.to] : [ui.branch], true) + ' after accept';
+          }
+        }
         return `<div class="cust-row itm-hrow${openable ? ' itm-hrow-link' : ''}"${openable ? ` data-act="purchase-view" data-id="${e.pid}" tabindex="0" role="button"` : ''}>
           <span class="cust-main">
             <span class="cust-name">${esc(e.type)}${e.ref ? ' · ' + esc(e.ref) : ''}</span>
             <span class="cust-sub">${e.sub}</span>
+            ${flTxt ? `<span class="cust-sub itm-flow">${flTxt}</span>` : ''}
           </span>
           <span class="itm-meta">
             <span class="itm-qty ${qcls}">${esc(qtxt)}</span>
@@ -6312,19 +6393,57 @@
     toast('PDF downloaded · ' + p.name + '.pdf');
   }
 
+  /* Stock at each branch before and after a transfer's units move. Pending
+     requests show what accepting would do; accepted ones show what happened. */
+  function transferFlow(t) {
+    var map = {};
+    (t.lines || []).forEach(function (l) {
+      var it = itemById(l.itemId);
+      var q = Number(l.qty) || 0;
+      if (!it || !S.branchById(t.from) || !S.branchById(t.to)) { map[l.itemId] = null; return; }
+      if (t.status === 'accepted') {
+        var evs = applyStockFlow(it, itemHistory(it));
+        var out = evs.filter(function (e) { return e.type === 'Transfer out' && e.trId === t.id; })[0];
+        var inn = evs.filter(function (e) { return e.type === 'Transfer in' && e.trId === t.id; })[0];
+        map[l.itemId] = {
+          from: (out && out.flow && out.flow[t.from]) || null,
+          to: (inn && inn.flow && inn.flow[t.to]) || null
+        };
+      } else if (t.status === 'pending') {
+        var f0 = S.stockOf(it, t.from), t0 = S.stockOf(it, t.to);
+        map[l.itemId] = {
+          from: { before: f0, after: r2(f0 - q) },
+          to: { before: t0, after: r2(t0 + q) }
+        };
+      } else {
+        map[l.itemId] = null;
+      }
+    });
+    return map;
+  }
+
   function transferModal(id) {
     var t = db.transfers.filter(function (x) { return x.id === id; })[0];
     if (!t) return;
     var badge = t.status === 'accepted' ? '<span class="badge ok">Accepted</span>'
       : t.status === 'rejected' ? '<span class="badge bad">Rejected</span>' : '<span class="badge warn">Pending</span>';
+    var flow = transferFlow(t);
+    var cell = function (fl) {
+      return fl ? `${num(fl.before)} → <b>${num(fl.after)}</b>` : '<span class="sub">—</span>';
+    };
     openModal(t.no, `
       <div class="grid2" style="margin-bottom:12px">
         <div><div class="sub">From</div><div style="font-weight:600">${esc(branchName(t.from))}</div></div>
         <div style="text-align:right"><div class="sub">To</div><div style="font-weight:600">${esc(branchName(t.to))}</div></div>
       </div>
       <div style="margin-bottom:12px">${badge} <span class="sub">Requested by ${esc(t.byName || '—')} on ${esc(fmtDate(t.date))}${t.acceptedBy ? ' · handled by ' + esc(t.acceptedBy) : ''}</span></div>
-      <div class="table-wrap"><table class="data" style="min-width:0"><thead><tr><th>Item</th><th class="num">Qty</th></tr></thead>
-      <tbody>${t.lines.map(function (l) { return `<tr><td>${esc(l.name)}</td><td class="num">${num(l.qty)}</td></tr>`; }).join('')}</tbody></table></div>
+      <div class="table-wrap"><table class="data" style="min-width:0"><thead><tr><th>Item</th><th class="num">Qty</th><th>${esc(branchName(t.from))} stock</th><th>${esc(branchName(t.to))} stock</th></tr></thead>
+      <tbody>${t.lines.map(function (l) {
+        var f = flow[l.itemId] || {};
+        return `<tr><td>${esc(l.name)}</td><td class="num">${num(l.qty)}</td>
+          <td>${cell(f.from)}</td><td>${cell(f.to)}</td></tr>`;
+      }).join('')}</tbody></table></div>
+      <div class="sub" style="margin-top:6px">Stock before → after ${t.status === 'pending' ? 'accepting' : t.status === 'accepted' ? 'this transfer' : 'the request'}.</div>
       <div class="row-actions" style="margin-top:16px">
         <button class="btn" data-act="tr-pdf-save" data-id="${t.id}">Download PDF</button>
         <button class="btn primary" data-act="tr-pdf" data-id="${t.id}">Share PDF</button>

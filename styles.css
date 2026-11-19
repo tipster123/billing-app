@@ -1496,6 +1496,7 @@ html[data-theme="dark"] .itm-stat.bad{color:#fb923c}
 .itm-qty.neg{color:#c2410c}
 html[data-theme="dark"] .itm-qty.pos{color:#4ade80}
 html[data-theme="dark"] .itm-qty.neg{color:#fb923c}
+.itm-flow{font-variant-numeric:tabular-nums;color:var(--text);opacity:.75}
 .cd-head{display:flex;align-items:flex-start;gap:10px;margin:0 0 6px}
 .cd-head .grow{min-width:0}
 
