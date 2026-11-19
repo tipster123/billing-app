@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v125';
+  var APP_VERSION = 'v126';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -1371,7 +1371,7 @@
       if (pend.length) rows += alertRow('warn', 'Stock transfers to accept',
         'Waiting for ' + branchName(ui.branch), pend.length, 'transfers');
       if (dmgPend.length) rows += alertRow('bad', 'Damage not settled',
-        'Tap to settle the loss', dmgPend.length, 'damage');
+        can('damage.settle') ? 'Tap to settle the loss' : 'Waiting for the owner to settle', dmgPend.length, 'damage');
       if (low.length) rows += alertRow('bad', 'Low stock items',
         'At or below reorder level', low.length, 'items');
       if (!rows) return '';
@@ -3852,12 +3852,15 @@
     var list = fApply('damage', all);
     var waiting = all.filter(function (d) { return !d.adjusted; });
     var loss = all.reduce(function (s, d) { return s + Number(d.costValue || 0); }, 0);
+    var canSettle = can('damage.settle');
     return `
       <div class="page-head"><div><h2>Damage / loss</h2>
         <div class="sub">${esc(branchName(ui.branch))} · ${all.length} ${all.length === 1 ? 'entry' : 'entries'} · ${money(loss)} total${waiting.length ? ' · ' + waiting.length + ' not settled' : ''}</div></div>
         <div class="row-actions">${can('damage') ? '<button class="btn primary" data-act="dmg-new">+ Record damage</button>' : ''}</div></div>
       ${fBar('damage')}
-      ${waiting.length ? `<div class="note" style="margin:12px 0">Tap <b>Settle</b> when the loss is sorted out — the quantity is then taken out of stock at that branch.</div>` : ''}
+      ${waiting.length ? (canSettle
+        ? `<div class="note" style="margin:12px 0">Tap <b>Settle</b> when the loss is sorted out — the quantity is then taken out of stock at that branch.</div>`
+        : `<div class="note" style="margin:12px 0">Only the owner, or staff the owner has allowed, can settle a loss. Ask the owner to settle these.</div>`) : ''}
       ${list.length ? `<div class="table-wrap"><table class="data"><thead><tr>
         <th>Date</th><th>What happened</th><th>Responsible</th><th class="num">Amount</th><th>Note</th><th>By</th><th>Status</th><th></th>
         </tr></thead><tbody>${list.map(function (d) {
@@ -3867,7 +3870,7 @@
             <td class="num">${money(d.costValue)}</td>
             <td>${esc(d.reason || '—')}</td><td>${esc(d.byName || '—')}</td>
             <td>${d.adjusted ? '<span class="badge ok">Settled</span>' : '<span class="badge warn">Pending</span>'}</td>
-            <td style="text-align:right;white-space:nowrap">${(!d.adjusted && can('damage'))
+            <td style="text-align:right;white-space:nowrap">${(!d.adjusted && canSettle)
               ? `<button class="btn sm primary" data-act="dmg-adjust" data-id="${d.id}">Settle</button> ` : ''}${can('damage')
               ? `<button class="btn sm danger ghost" data-act="del-ask" data-kind="damage" data-id="${d.id}">Delete</button>` : ''}</td></tr>`;
         }).join('')}</tbody></table></div>`
@@ -7817,7 +7820,7 @@
     if (action === 'sr-start') { closeModal(); return sreturnModal(id); }
     if (action === 'dmg-new') return damageModal();
     if (action === 'dmg-adjust') {
-      if (!can('damage')) return toast('No permission');
+      if (!can('damage.settle')) return toast('Only the owner can settle — ask the owner for permission');
       var dj = db.damages.filter(function (x) { return x.id === id; })[0];
       if (!dj || dj.adjusted) return;
       dj.adjusted = true; dj.adjustedAt = Date.now();

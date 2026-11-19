@@ -17,7 +17,8 @@ window.Store = (function () {
   var ALL_PERMS = [
     'dashboard', 'bill', 'invoices', 'returns', 'purchases', 'damage', 'complaints', 'transfer', 'items', 'customers',
     'ledgers', 'expenses', 'reports', 'staff', 'settings',
-    'price.edit', 'discount', 'invoice.delete', 'stock.edit', 'expense.edit', 'purchase.edit', 'profit.view'
+    'price.edit', 'discount', 'invoice.delete', 'stock.edit', 'expense.edit', 'purchase.edit', 'profit.view',
+    'damage.settle'
   ];
 
   var PERM_LABELS = {
@@ -42,12 +43,13 @@ window.Store = (function () {
     'stock.edit': 'Edit stock levels',
     'expense.edit': 'Add / edit expenses',
     'purchase.edit': 'Edit purchases',
-    'profit.view': 'See cost, profit & purchase prices'
+    'profit.view': 'See cost, profit & purchase prices',
+    'damage.settle': 'Settle damage / loss'
   };
 
   var PERM_GROUPS = [
     { title: 'Screens', keys: ['dashboard', 'bill', 'invoices', 'returns', 'purchases', 'damage', 'complaints', 'transfer', 'items', 'customers', 'ledgers', 'expenses', 'reports', 'staff', 'settings'] },
-    { title: 'Sensitive actions', keys: ['price.edit', 'discount', 'invoice.delete', 'stock.edit', 'expense.edit', 'purchase.edit', 'profit.view'] }
+    { title: 'Sensitive actions', keys: ['price.edit', 'discount', 'invoice.delete', 'stock.edit', 'expense.edit', 'purchase.edit', 'profit.view', 'damage.settle'] }
   ];
 
   var ROLE_LABEL = { owner: 'Owner / Admin', manager: 'Manager', cashier: 'Cashier' };
