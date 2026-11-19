@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v119';
+  var APP_VERSION = 'v120';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -725,7 +725,7 @@
     cloudSetStatus('busy', 'Downloading the cloud copy…');
     return cloudFetchCopy().then(function (fetched) {
       cloudApplyCopy(fetched);
-      ui.branch = S.myBranchId();
+      ui.branch = startBranchId();
       newBill();
       render();
       cloudSetStatus('ok', 'Loaded the cloud copy');
@@ -912,7 +912,7 @@
     var res = S.login($('#loginUser').value, $('#loginPass').value);
     if (res.error) { toast(res.error); return; }
     db = S.get();
-    ui.branch = S.myBranchId();
+    ui.branch = startBranchId();
     ui.tab = firstTab();
     newBill();
     $('#login').hidden = true;
@@ -1011,7 +1011,7 @@
   function render() {
     if (!S.currentStaff()) { showLogin(); return; }
     if (!tabAllowed(ui.tab)) ui.tab = firstTab();
-    if (!ui.branch || !S.branchById(ui.branch)) ui.branch = S.myBranchId();
+    if (!ui.branch || !S.branchById(ui.branch)) ui.branch = startBranchId();
 
     var staff = S.currentStaff();
     var tab = tabDef(ui.tab);
@@ -1107,6 +1107,21 @@
   function rememberTab(id) {
     try { sessionStorage.setItem('billing.tab', String(id || '')); } catch (e) {}
   }
+
+  /* The branch you picked is remembered for this browser tab, so a refresh keeps
+     you in that branch instead of dropping back to the first one. */
+  function savedBranchId() {
+    var id = '';
+    try { id = sessionStorage.getItem('billing.branch') || ''; } catch (e) { id = ''; }
+    if (!id) return '';
+    var ok = false;
+    try { ok = S.visibleBranches().some(function (b) { return b.id === id; }); } catch (e) { ok = false; }
+    return ok ? id : '';
+  }
+  function rememberBranch(id) {
+    try { sessionStorage.setItem('billing.branch', String(id || '')); } catch (e) {}
+  }
+  function startBranchId() { return savedBranchId() || S.myBranchId(); }
 
   /* ------------------------------------------- purchase approvals (cashier / manager) */
   function purchaseApprovalMode() {
@@ -1393,7 +1408,7 @@
     if (note) parts.push('tn=' + encodeURIComponent(note));
     return 'upi://pay?' + parts.join('&');
   }
-  function qrHTML(amount, note, cls) {
+  function qrHTML(amount, note, cls, showId) {
     var s = db.settings;
     if (s.showUpiQrOnInvoice === false || !s.upiId || typeof window.qrcode !== 'function') return '';
     try {
@@ -1401,7 +1416,7 @@
       qr.addData(upiUri(amount, note));
       qr.make();
       return `<div class="qr-box ${cls || ''}"><img alt="UPI payment QR code" src="${qr.createDataURL(4, 8)}">
-        <div class="qr-cap">Scan to pay ${s.upiId ? esc(s.upiId) : ''}</div></div>`;
+        <div class="qr-cap">Scan to pay${showId && s.upiId ? ' ' + esc(s.upiId) : ''}</div></div>`;
     } catch (e) { return ''; }
   }
 
@@ -6570,7 +6585,9 @@
     var addr = s.invoiceAddress || ((br ? br.name : '') + (br && br.address ? ', ' + br.address : ''));
     var terms = s.printTerms !== false ? termsList() : [];
     var charges = invoiceCharges(inv);
-    var qr = qrHTML(due > 0 ? due : t.total, inv.no, 'rcpt-qr');
+    /* the thermal receipt has no bank details block, so it keeps the UPI ID
+       under the QR; the invoice layouts print the ID with the bank details. */
+    var qr = qrHTML(due > 0 ? due : t.total, inv.no, 'rcpt-qr', true);
     var bmon = function(n){ return billMoney(n,s); };
     var sum = function (label, val, cls) {
       return `<div class="rcpt-row${cls ? ' ' + cls : ''}"><span>${label}</span><span>${val}</span></div>`;
@@ -6871,7 +6888,7 @@
 
     return { label: label, undo: { label: 'Restored', run: function () {
       db = S.importData(JSON.parse(snapshot));
-      ui.branch = S.myBranchId();
+      ui.branch = startBranchId();
     } } };
   }
 
@@ -7889,7 +7906,7 @@
       });
       db.branches = db.branches.filter(function (b) { return b.id !== id; });
       db.items.forEach(function (it) { if (it.stock) delete it.stock[id]; });
-      if (ui.branch === id) ui.branch = keep.id;
+      if (ui.branch === id) { ui.branch = keep.id; rememberBranch(keep.id); }
       logActivity('Deleted branch ' + brGone.name, 'delete');
       closeModal(); save(); render();
       return toast('Branch deleted' + (moved ? ' · ' + moved + (moved === 1 ? ' login moved' : ' logins moved') + ' to ' + keep.name : ''));
@@ -7959,13 +7976,13 @@
     if (action === 'seed-demo') {
       if (!S.isOwner()) return toast('Only the owner can reset data');
       if (!confirm('Replace all data with the demo shop?')) return;
-      db = S.reset(true); ui.branch = S.myBranchId(); newBill(); render();
+      db = S.reset(true); ui.branch = startBranchId(); newBill(); render();
       return toast('Demo data loaded');
     }
     if (action === 'reset-all') {
       if (!S.isOwner()) return toast('Only the owner can erase data');
       if (!confirm('Erase ALL data — on this device and in Supabase?\n\nBills, stock, customers, purchases, expenses, staff accounts (except the owner) and the activity log are deleted. The owner login and the shop settings stay. This cannot be undone.')) return;
-      db = S.reset(false); ui.branch = S.myBranchId(); newBill(); render();
+      db = S.reset(false); ui.branch = startBranchId(); newBill(); render();
       toast('Erased on this device — emptying Supabase…');
       cloudWipeAll().then(function (r) {
         toast(r.ok ? 'All data erased, here and in Supabase' : 'Erased here. Supabase said: ' + r.error);
@@ -9226,7 +9243,7 @@
       reader.onload = function () {
         try {
           db = S.importData(JSON.parse(String(reader.result || '{}')));
-          ui.branch = S.myBranchId(); newBill(); render();
+          ui.branch = startBranchId(); newBill(); render();
           toast('Backup restored');
         } catch (e) { toast('That file is not a valid backup'); }
       };
@@ -9290,7 +9307,7 @@
     applyTheme(mode, color);
     ui.rep.from = S.monthStart();
     ui.rep.to = today();
-    if (S.currentStaff()) { ui.branch = S.myBranchId(); restoreTab(); }
+    if (S.currentStaff()) { ui.branch = startBranchId(); restoreTab(); }
     newBill();
     newTransfer();
 
@@ -9324,6 +9341,7 @@
       if (!e.target || !e.target.getAttribute) return;
       if (e.target.id === 'branchSel') {
         ui.branch = e.target.value;
+        rememberBranch(ui.branch);
         ui.itmAll = false;
         newBill(); newTransfer(); closeSidebar(); render(); return;
       }
@@ -9380,7 +9398,7 @@
       applyTheme(ap2.mode, ap2.color);
       ui.rep.from = S.monthStart();
       ui.rep.to = today();
-      ui.branch = S.myBranchId();
+      ui.branch = startBranchId();
       if (S.currentStaff()) {
         $('#login').hidden = true;
         $('#app').style.display = '';
