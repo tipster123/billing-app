@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v129';
+  var APP_VERSION = 'v130';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -884,6 +884,23 @@
     return snap;
   }
 
+  /* Put the caret at a given place in a field. Chrome and phone browsers drop
+     the caret to position 0 when a freshly rendered input is focused, so every
+     typed digit lands in front of the ones before it (123 comes out as 321).
+     Number inputs cannot report or set a selection, so they are switched to
+     text for the length of this call. */
+  function setCaret(el, pos) {
+    if (!el || typeof el.value !== 'string') return;
+    var at = pos == null ? el.value.length : Math.max(0, Math.min(Number(pos) || 0, el.value.length));
+    var isNum = String(el.type || '').toLowerCase() === 'number';
+    try { el.focus({ preventScroll: true }); } catch (e) { try { el.focus(); } catch (e2) {} }
+    try {
+      if (isNum) el.type = 'text';
+      if (el.setSelectionRange) el.setSelectionRange(at, at);
+    } catch (e) {}
+    try { if (isNum) el.type = 'number'; } catch (e) {}
+  }
+
   function restoreFocus(snap) {
     if (!snap) return;
     var sel = '[' + snap.kind + '="' + snap.key + '"]';
@@ -891,10 +908,9 @@
     if (snap.fk != null) sel += '[data-k="' + snap.fk + '"]';
     var el = $(sel);
     if (!el || !el.focus) return;
-    try { el.focus({ preventScroll: true }); } catch (e) { try { el.focus(); } catch (e2) {} }
-    if (snap.start != null && el.setSelectionRange) {
-      try { el.setSelectionRange(snap.start, snap.end); } catch (e) {}
-    }
+    /* When the field cannot report a caret (number inputs), keep it at the end
+       so typing stays left to right instead of being inserted at the start. */
+    setCaret(el, snap.start == null ? el.value.length : snap.start);
   }
 
   function go(tab) {
@@ -4007,7 +4023,7 @@
       <div class="field"><label>Quantity in stock</label>
         <div style="display:flex;gap:8px;align-items:center">
           <button class="btn" type="button" data-act="adj-step" data-val="-1" aria-label="One less">−1</button>
-          <input class="inp" type="number" step="1" min="0" name="counted" value="${have}" required autocomplete="off" data-input="adj-counted" style="flex:1;text-align:center">
+          <input class="inp" type="text" inputmode="numeric" step="1" min="0" name="counted" value="${have}" required autocomplete="off" data-input="adj-counted" style="flex:1;text-align:center">
           <button class="btn" type="button" data-act="adj-step" data-val="1" aria-label="One more">+1</button>
         </div>
       </div>
@@ -5599,7 +5615,7 @@
           <label class="pset-toggle"><span>Phone number</span><input type="checkbox" name="printPhone"${on('printPhone',1)?' checked':''}></label>
           <div class="pset-row"><label>GSTIN on Sale</label><div class="pset-inline"><input type="checkbox" name="printGstin"${on('printGstin',0)?' checked':''}> <input class="inp sm" name="gstin" value="${esc(s.gstin||'')}" placeholder="GSTIN" style="max-width:170px"></div></div>
           <label class="pset-toggle"><span>Print Bill of Supply for non tax invoices</span><input type="checkbox" name="printBillOfSupply"${on('printBillOfSupply',0)?' checked':''}></label>
-          <div class="pset-row"><label>Extra spaces on top of PDF</label><input class="inp sm" type="number" min="0" max="30" step="1" name="extraTopSpace" value="${Number(s.extraTopSpace)||0}" style="width:90px"></div>
+          <div class="pset-row"><label>Extra spaces on top of PDF</label><input class="inp sm" type="text" inputmode="numeric" min="0" max="30" step="1" name="extraTopSpace" value="${Number(s.extraTopSpace)||0}" style="width:90px"></div>
           <label class="pset-toggle"><span>Print Original/Duplicate</span><input type="checkbox" name="printOriginalDuplicate"${on('printOriginalDuplicate',0)?' checked':''}></label>
           <div class="pset-row"><label>Sale name on bill</label><input class="inp sm" name="txnSaleName" value="${esc(s.txnSaleName||'Invoice')}" placeholder="Invoice"></div>
           <div class="field" style="margin-top:8px"><label>Address on invoice</label><input class="inp" name="invoiceAddress" value="${esc(s.invoiceAddress || '')}" placeholder="${esc(s.address || '')}"><div class="hint">Leave blank to use the branch address.</div></div>
@@ -5608,7 +5624,7 @@
         <div class="card pset-card"><div class="pset-head">Invoice numbering &amp; tax</div>
           <div class="grid3">
             <div class="field"><label>Invoice prefix</label><input class="inp" name="prefix" value="${esc(s.prefix)}" required></div>
-            <div class="field"><label>Tax rate (%)</label><input class="inp" type="number" min="0" max="100" step="0.01" name="taxRate" value="${esc(s.taxRate)}"${s.taxOn === false ? ' disabled' : ''}></div>
+            <div class="field"><label>Tax rate (%)</label><input class="inp" type="text" inputmode="decimal" min="0" max="100" step="0.01" name="taxRate" value="${esc(s.taxRate)}"${s.taxOn === false ? ' disabled' : ''}></div>
             <label class="check" style="align-self:end;margin-bottom:14px"><input type="checkbox" name="taxOn"${s.taxOn !== false ? ' checked' : ''}> Charge tax on bills</label>
           </div>
           <div class="pset-row" style="margin-top:10px"><label>Discount type</label>
@@ -5622,7 +5638,7 @@
 
         <div class="card pset-card"><div class="pset-head">Totals &amp; Taxes</div>
           <label class="pset-toggle"><span>Expand table to print on whole page</span><input type="checkbox" name="expandTable"${on('expandTable',0)?' checked':''}></label>
-          <div class="pset-row"><label>Min. No. of rows in Item Table</label><input class="inp sm" type="number" min="0" max="30" step="1" name="minRows" value="${Number(s.minRows)||0}" style="width:90px"></div>
+          <div class="pset-row"><label>Min. No. of rows in Item Table</label><input class="inp sm" type="text" inputmode="numeric" min="0" max="30" step="1" name="minRows" value="${Number(s.minRows)||0}" style="width:90px"></div>
           <label class="pset-toggle"><span>Total Item Quantity</span><input type="checkbox" name="printTotalQty"${on('printTotalQty',1)?' checked':''}></label>
           <label class="pset-toggle"><span>Amount with Decimal (eg 0.00)</span><input type="checkbox" name="printDecimals"${on('printDecimals',1)?' checked':''}></label>
           <label class="pset-toggle"><span>Received amount</span><input type="checkbox" name="printReceived"${on('printReceived',1)?' checked':''}></label>
@@ -5652,7 +5668,7 @@
           <div id="chargeRows">${charges.length ? charges.map(function (c, i) {
             return `<div class="charge-row">
               <input class="inp" data-input="sc-charge-name" data-id="${i}" value="${esc(c.name || '')}" placeholder="Charge name">
-              <input class="inp" type="number" min="0" step="0.01" data-input="sc-charge-amount" data-id="${i}" value="${c.amount || 0}" placeholder="0">
+              <input class="inp" type="text" inputmode="decimal" min="0" step="0.01" data-input="sc-charge-amount" data-id="${i}" value="${c.amount || 0}" placeholder="0">
               <button class="icon-btn danger" type="button" data-act="sc-charge-del" data-id="${i}" aria-label="Remove charge">✕</button>
             </div>`;
           }).join('') : '<div class="empty compact"><b>No extra charges</b>Add delivery, packing or any fee you charge.</div>'}</div>
@@ -5773,7 +5789,7 @@
           <div class="tot"><span>Balance</span><b style="color:#dc2626">${money(left)}</b></div>
         </div>
         <div class="grid2">
-          <div class="field"><label>Amount received</label><input class="inp" name="amount" type="number" step="0.01" min="0" max="${left}" value="${left}" required></div>
+          <div class="field"><label>Amount received</label><input class="inp" name="amount" type="text" inputmode="decimal" step="0.01" min="0" max="${left}" value="${left}" required></div>
           <div class="field"><label>Method</label><select class="inp" name="method">${['Cash', 'UPI', 'Card', 'Bank transfer', 'Credit'].map(function (m) {
             return `<option>${m}</option>`;
           }).join('')}</select></div>
@@ -5827,7 +5843,7 @@
     var priceLock = !can('price.edit');
     var stockLock = !can('stock.edit');
     var costField = can('profit.view')
-      ? `<div class="field"><label>Cost price</label><input class="inp" type="number" min="0" step="0.01" name="cost" value="${it ? it.cost : ''}"${priceLock ? ' disabled' : ''}></div>`
+      ? `<div class="field"><label>Cost price</label><input class="inp" type="text" inputmode="decimal" min="0" step="0.01" name="cost" value="${it ? it.cost : ''}"${priceLock ? ' disabled' : ''}></div>`
       : '';
     openModal(it ? 'Edit item' : 'Add item', `<form data-form="item">
       <input type="hidden" name="id" value="${it ? it.id : ''}">
@@ -5840,15 +5856,15 @@
         </div>
       </div>
       <div class="grid3">
-        <div class="field"><label>Selling price</label><input class="inp" type="number" min="0" step="0.01" name="price" required value="${it ? it.price : ''}"${priceLock ? ' disabled' : ''}></div>
+        <div class="field"><label>Selling price</label><input class="inp" type="text" inputmode="decimal" min="0" step="0.01" name="price" required value="${it ? it.price : ''}"${priceLock ? ' disabled' : ''}></div>
         ${costField}
-        <div class="field"><label>Reorder level</label><input class="inp" type="number" min="0" step="1" name="reorder" value="${it ? it.reorder : 0}"${stockLock ? ' disabled' : ''}></div>
+        <div class="field"><label>Reorder level</label><input class="inp" type="text" inputmode="numeric" min="0" step="1" name="reorder" value="${it ? it.reorder : 0}"${stockLock ? ' disabled' : ''}></div>
       </div>
       <div class="section-title" style="margin-top:0">Stock per branch</div>
       <div class="grid3">${db.branches.map(function (b) {
         var val = it ? (it.stock[b.id] || 0) : 0;
         return `<div class="field"><label>${esc(b.name)}</label>
-          <input class="inp" type="number" step="1" name="stock_${b.id}" value="${val}"${stockLock ? ' disabled' : ''}></div>`;
+          <input class="inp" type="text" inputmode="numeric" step="1" name="stock_${b.id}" value="${val}"${stockLock ? ' disabled' : ''}></div>`;
       }).join('')}</div>
       <div class="row-actions" style="justify-content:flex-end;margin-top:16px">
         <button class="btn" type="button" data-act="close-modal">Cancel</button>
@@ -5953,7 +5969,7 @@
         }).join('')}</select></div>
       </div>
       <div class="grid2">
-        <div class="field"><label>Total amount</label><input class="inp" type="number" min="0" step="0.01" name="amount" id="expAmount" data-input="exp-amount" value="${amt || ''}" required></div>
+        <div class="field"><label>Total amount</label><input class="inp" type="text" inputmode="decimal" min="0" step="0.01" name="amount" id="expAmount" data-input="exp-amount" value="${amt || ''}" required></div>
         <div class="field"><label>Payment</label><label class="check" style="margin-top:12px"><input type="checkbox" name="paidFull" id="expPaidFull" data-change="exp-paid-flag"${isPaid ? ' checked' : ''}> Paid — money already given</label></div>
       </div>
       <div class="grid2">
@@ -5995,7 +6011,7 @@
         <div class="field"><label>User ID</label><input class="inp" name="username" required value="${esc(s ? s.username : '')}" autocomplete="off"></div>
         <div class="field"><label>Password</label><input class="inp" name="password" required value="${esc(s ? s.password : '')}" autocomplete="off"></div>
       </div>
-      <div class="field"><label>Monthly sales target</label><input class="inp" type="number" min="0" step="1" name="target" value="${s ? (s.target || 0) : 0}" placeholder="0 = no target"></div>
+      <div class="field"><label>Monthly sales target</label><input class="inp" type="text" inputmode="numeric" min="0" step="1" name="target" value="${s ? (s.target || 0) : 0}" placeholder="0 = no target"></div>
       <div class="section-title" style="margin-top:0">Branch access</div>
       <div class="hint" style="margin-bottom:8px">Tick every branch this login can use. They pick the active branch from the branch menu at the top, and bills, stock and reports follow it.</div>
       <div class="perm-grid" style="margin-bottom:14px">
@@ -6043,8 +6059,8 @@
       <div class="section-title" style="margin-top:0">Monthly targets</div>
       <div class="hint" style="margin-bottom:8px">Measured against this month's sales. Staff see the sales target; the profit target is yours only. Profit is what is left after cost, expenses and damage. Leave a box empty for no target.</div>
       <div class="grid2">
-        <div class="field"><label>Sales target</label><input class="inp" type="number" min="0" step="1" name="targetSales" value="${tg.sales || ''}" placeholder="0" autocomplete="off"></div>
-        <div class="field"><label>Profit target</label><input class="inp" type="number" min="0" step="1" name="targetProfit" value="${tg.profit || ''}" placeholder="0" autocomplete="off"></div>
+        <div class="field"><label>Sales target</label><input class="inp" type="text" inputmode="numeric" min="0" step="1" name="targetSales" value="${tg.sales || ''}" placeholder="0" autocomplete="off"></div>
+        <div class="field"><label>Profit target</label><input class="inp" type="text" inputmode="numeric" min="0" step="1" name="targetProfit" value="${tg.profit || ''}" placeholder="0" autocomplete="off"></div>
       </div>
       <div class="row-actions" style="justify-content:flex-end;margin-top:16px">
         <button class="btn" type="button" data-act="close-modal">Cancel</button>
@@ -9669,7 +9685,27 @@
       if (t.closest('#themeBtn')) { var nm = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'; applyTheme(nm, (db.settings.appearance && db.settings.appearance.color) || 'red'); save(); toast('Saved'); return; }
     });
 
-    document.addEventListener('input', function (e) { if (e.target && e.target.getAttribute) onInput(e.target); });
+    document.addEventListener('input', function (e) {
+      var el = e.target;
+      if (!el || !el.getAttribute) return;
+      var kind = el.getAttribute('data-input') || '';
+      var pos = null;
+      try { pos = el.selectionStart; } catch (err) {}
+      onInput(el);
+      /* The app redraws the view while typing. If that replaced the field the
+         user is in, the browser leaves the caret at position 0 and the next
+         digit is inserted in front of the others (123 → 321). Put the caret
+         back where it was, at the end when it is not known. */
+      if (!kind || el.isConnected) return;
+      var sel = '[data-input="' + kind + '"]';
+      var id = el.getAttribute('data-id');
+      if (id != null && id !== '') sel += '[data-id="' + id + '"]';
+      var fk = el.getAttribute('data-k');
+      if (fk != null) sel += '[data-k="' + fk + '"]';
+      var next = $(sel);
+      if (!next || !next.focus) return;
+      setCaret(next, pos == null ? next.value.length : pos);
+    });
     document.addEventListener('change', function (e) {
       if (!e.target || !e.target.getAttribute) return;
       if (e.target.id === 'branchSel') {
