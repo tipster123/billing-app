@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v118';
+  var APP_VERSION = 'v119';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -3793,10 +3793,26 @@
       </div></form>`);
   }
 
-  /* Stock adjustment: type the quantity actually counted at a branch and the
-     item's stock moves by the difference. The change is kept as a settled
-     entry, so the item history, the damage list and the cloud copy all show
-     it, and deleting that entry puts the stock back the way it was. */
+  /* Stock adjustment: set the quantity actually counted at a branch with −1 /
+     +1 or by typing it, and the item's stock moves by the difference. The
+     change is kept as a settled entry, so the item history, the damage list
+     and the cloud copy all show it, and deleting that entry puts the stock
+     back the way it was. */
+  function adjStockPreview() {
+    var f = document.querySelector('form[data-form="stock-adjust"]');
+    if (!f) return;
+    var wasEl = f.querySelector('input[name="was"]');
+    var cntEl = f.querySelector('input[name="counted"]');
+    var hint = document.getElementById('adjStockHint');
+    if (!wasEl || !cntEl || !hint) return;
+    var was = Number(wasEl.value) || 0;
+    var now = Number(cntEl.value);
+    if (!isFinite(now) || now < 0) { hint.innerHTML = 'In stock now <b>' + num(was) + '</b>. Type 0 or more.'; return; }
+    var d = r2(now - was);
+    hint.innerHTML = 'In stock now <b>' + num(was) + '</b>. ' +
+      (d ? 'Change ' + (d > 0 ? '+' : '−') + num(Math.abs(d)) + ' → <b>' + num(now) + '</b>' : 'Tap −1 or +1 to change it.');
+  }
+
   function adjustStockModal(itemId) {
     var it = itemById(itemId);
     if (!it) return toast('Item not found');
@@ -3807,13 +3823,17 @@
     var have = r2(S.stockOf(it, bid));
     openModal('Adjust stock · ' + (it.name || 'Item'), `<form data-form="stock-adjust">
       <input type="hidden" name="id" value="${it.id}">
-      <div class="grid2">
-        <div class="field"><label>Branch</label><select class="inp" name="branchId">
-          ${branches.map(function (b) { return `<option value="${b.id}"${b.id === bid ? ' selected' : ''}>${esc(b.name)} · ${num(S.stockOf(it, b.id))} in stock</option>`; }).join('')}</select></div>
-        <div class="field"><label>Quantity actually in stock</label>
-          <input class="inp" type="number" step="1" name="counted" value="${have}" required autocomplete="off"></div>
+      <input type="hidden" name="was" value="${have}">
+      <div class="field"><label>Branch</label><select class="inp" name="branchId">
+        ${branches.map(function (b) { return `<option value="${b.id}"${b.id === bid ? ' selected' : ''}>${esc(b.name)} · ${num(S.stockOf(it, b.id))} in stock</option>`; }).join('')}</select></div>
+      <div class="field"><label>Quantity in stock</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn" type="button" data-act="adj-step" data-val="-1" aria-label="One less">−1</button>
+          <input class="inp" type="number" step="1" min="0" name="counted" value="${have}" required autocomplete="off" data-input="adj-counted" style="flex:1;text-align:center">
+          <button class="btn" type="button" data-act="adj-step" data-val="1" aria-label="One more">+1</button>
+        </div>
       </div>
-      <div class="hint">${esc(branchName(bid))} shows <b>${num(have)}</b> in stock. Saving sets it to the number you type and keeps a record of the change.</div>
+      <div class="hint" id="adjStockHint">${esc(branchName(bid))} has <b>${num(have)}</b> now. Tap −1 or +1, or type the count.</div>
       <div class="field"><label>Reason (optional)</label>
         <input class="inp" name="reason" placeholder="Stock count, damage, found stock…" autocomplete="off"></div>
       <div class="row-actions" style="justify-content:flex-end;margin-top:16px">
@@ -7680,6 +7700,16 @@
       return render();
     }
     if (action === 'item-hist') { ui.itemHist = el.getAttribute('data-val') || 'all'; return render(); }
+    if (action === 'adj-step') {
+      var sf = document.querySelector('form[data-form="stock-adjust"]');
+      if (!sf) return;
+      var sIn = sf.querySelector('input[name="counted"]');
+      if (!sIn) return;
+      var by = Number(el && el.getAttribute('data-val')) || 0;
+      sIn.value = String(Math.max(0, r2((Number(sIn.value) || 0) + by)));
+      adjStockPreview();
+      return;
+    }
     if (action === 'item-adjust') {
       ui.itemMore = '';
       if (!can('stock.edit') && !can('damage')) return toast('No permission');
@@ -8858,6 +8888,7 @@
   function onInput(el) {
     var kind = el.getAttribute('data-input');
     if (!kind) return;
+    if (kind === 'adj-counted') { adjStockPreview(); return; }
     if (kind === 'exp-amount') {
       updateExpBalHint();
       return;
