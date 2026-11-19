@@ -1544,6 +1544,34 @@ html[data-theme="dark"] .itm-adjust-btn:hover{color:#08130c}
   .itm-head-actions .itm-head-btn{flex:1}
 }
 
+/* ---- estimates (quotes that never move stock) ---- */
+.seg.docseg{padding:3px;gap:2px}
+.seg.docseg button{padding:4px 10px;font-size:12px}
+.seg.inv-tabs{margin:0 0 10px;max-width:100%;overflow:auto}
+.seg.inv-tabs button{font-size:12.5px;white-space:nowrap}
+.est-doc .est-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+.est-doc .est-cust{font-weight:700;font-size:14.5px}
+.est-doc .est-total{font-weight:800;font-size:18px;letter-spacing:-.02em;white-space:nowrap}
+.est-doc .est-lines{margin:6px 0}
+.est-doc .est-line{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--line-soft);font-size:13px}
+.est-doc .est-line:last-child{border-bottom:0}
+.est-doc .est-line .grow{display:flex;flex-direction:column;min-width:0}
+.est-doc .est-line .sub{font-size:11px;margin-top:1px}
+.est-doc .est-amt{font-weight:600;white-space:nowrap}
+@media (max-width:520px){
+  .bill-topbar{flex-wrap:wrap;gap:6px}
+  .bill-topbar-main{flex:1 1 100%}
+  .bill-topbar-actions{width:100%;justify-content:flex-start}
+  .bill-topbar-actions .docseg{margin-right:auto}
+}
+
+@media (max-width:640px){
+  .rep-dates{flex-wrap:wrap}
+  .rep-dates label{flex:1 1 130px}
+  .rep-dates label:first-child{flex:1 1 100%}
+  .est-doc .est-total{font-size:16px}
+}
+
 /* ---- EOD report: tighter layout on small screens only ---- */
 @media (max-width:640px){
   .eod{gap:5px !important}

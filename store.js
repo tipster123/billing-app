@@ -168,7 +168,8 @@ window.Store = (function () {
       }],
       items: [], customers: [], invoices: [], transfers: [], expenses: [], cats: [],
       suppliers: [], purchases: [], preturns: [], sreturns: [], damages: [], complaints: [], staffLedger: [], activity: [],
-      counter: 1040, tcounter: 100, pcounter: 200, rcounter: 300, ccomp: 1, seeded: true
+      estimates: [],
+      counter: 1040, ecounter: 100, tcounter: 100, pcounter: 200, rcounter: 300, ccomp: 1, seeded: true
     };
   }
 
@@ -344,7 +345,7 @@ window.Store = (function () {
     obj.branches = Array.isArray(obj.branches) && obj.branches.length ? obj.branches : base.branches;
     obj.branchArchive = obj.branchArchive && typeof obj.branchArchive === 'object' ? obj.branchArchive : {};
     obj.staff = Array.isArray(obj.staff) && obj.staff.length ? obj.staff : base.staff;
-    ['items', 'customers', 'invoices', 'transfers', 'expenses', 'suppliers', 'purchases', 'preturns', 'sreturns', 'damages', 'staffLedger', 'activity', 'cats'].forEach(function (k) {
+    ['items', 'customers', 'invoices', 'estimates', 'transfers', 'expenses', 'suppliers', 'purchases', 'preturns', 'sreturns', 'damages', 'staffLedger', 'activity', 'cats'].forEach(function (k) {
       obj[k] = Array.isArray(obj[k]) ? obj[k] : [];
     });
     /* older seeded bills stored their rows as `items`; normalise so every
@@ -433,6 +434,8 @@ window.Store = (function () {
     });
     obj.ccomp = Number(obj.ccomp) || ((obj.complaints || []).length + 1);
     obj.counter = Number(obj.counter) || 1040;
+    /* estimates are quotes: they live apart from invoices and never move stock */
+    obj.ecounter = Number(obj.ecounter) || 100;
     obj.tcounter = Number(obj.tcounter) || 100;
     obj.pcounter = Number(obj.pcounter) || 200;
     obj.rcounter = Number(obj.rcounter) || 300;

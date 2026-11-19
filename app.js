@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v135';
+  var APP_VERSION = 'v136';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -97,6 +97,7 @@
   }
   function invState() {
     if (!ui.inv) ui.inv = { status: 'all', page: 1, per: 12 };
+    if (ui.inv.tab !== 'est') ui.inv.tab = 'bills';
     if (!ui.inv.status) ui.inv.status = 'all';
     if (!ui.inv.page) ui.inv.page = 1;
     if (!ui.inv.per) ui.inv.per = 12;
@@ -825,7 +826,11 @@
   function fabFor(tabId) {
     var map = {
       dashboard: { label: 'New bill', act: 'new-bill' },
-      invoices: { label: 'New bill', act: 'new-bill' },
+      /* the invoices screen also holds estimates, so the create button follows
+         whichever tab is open */
+      invoices: invState().tab === 'est'
+        ? { label: 'New estimate', act: 'new-estimate' }
+        : { label: 'New bill', act: 'new-bill' },
       customers: ui.partyTab === 'suppliers' && (S.isOwner() || can('purchases'))
         ? { label: 'Add supplier', act: 'supplier-new' }
         : { label: 'New customer', act: 'cust-new' },
@@ -959,8 +964,10 @@
     var p = $('#loginPass'); if (p) p.value = '';
   }
 
-  function newBill() {
+  function newBill(opts) {
+    opts = opts || {};
     ui.bill = {
+      kind: opts.kind === 'estimate' ? 'estimate' : 'sale',
       customerId: '', date: today(), discount: 0, autoPay: true, payments: [{ method: 'Cash', amount: 0 }],
       lines: [], customerChosen: false,
       fields: {},
@@ -972,6 +979,24 @@
   }
 
   function newTransfer() { ui.transfer = { to: '', lines: [], q: '' }; }
+
+  /* Estimates are quotes. They are numbered on their own series, never touch
+     stock, and never appear in invoices, dues, dashboards or reports. */
+  function nextEstSeq() {
+    return Math.max(Number(db.ecounter) || 100, 100) + 1;
+  }
+  function estById(id) {
+    return (db.estimates || []).filter(function (x) { return x.id === id; })[0] || null;
+  }
+  function branchEstimates(b) {
+    return (db.estimates || []).filter(function (e) { return e.branchId === (b || ui.branch); });
+  }
+  function billKindSeg(b) {
+    var est = b && b.kind === 'estimate';
+    return '<div class="seg docseg" role="group" aria-label="Bill or estimate">' +
+      '<button type="button" class="' + (est ? '' : 'on') + '" data-act="bill-kind" data-id="sale">Bill</button>' +
+      '<button type="button" class="' + (est ? 'on' : '') + '" data-act="bill-kind" data-id="estimate">Estimate</button></div>';
+  }
 
   function editInvoice(id) {
     if (!can('invoice.delete')) return toast('You do not have permission to edit bills');
@@ -1618,7 +1643,8 @@
     var t = billTotals();
     var taxRate = Number(db.settings.taxRate) || 0;
     var taxOn = !!(db.settings.taxOn !== false && b.taxOn && taxRate > 0);
-    var nextNo = branchPrefix(ui.branch) + '-' + nextBillSeq();
+    var isEst = b.kind === 'estimate';
+    var nextNo = isEst ? 'EST-' + nextEstSeq() : branchPrefix(ui.branch) + '-' + nextBillSeq();
     var paid = paymentTotal();
     var due = r2(t.total - paid);
     var cust = b.customerId ? findCust(b.customerId) : null;
@@ -1629,10 +1655,10 @@
       return `<div class="bill-compact bill-fast">
       <div class="page-head bill-fast-head compact-head">
         <div>
-          <h2>New sale <span class="bill-fast-no">${esc(nextNo)}</span></h2>
+          <h2>New ${isEst ? 'estimate' : 'sale'} <span class="bill-fast-no">${esc(nextNo)}</span></h2>
           <div class="sub">${esc(branchName(ui.branch))} · ${esc(fmtDate(today()))}</div>
         </div>
-        <div class="row-actions"><button class="btn sm" data-act="clear-cart">Cancel</button></div>
+        <div class="row-actions">${billKindSeg(b)}<button class="btn sm" data-act="clear-cart">Cancel</button></div>
       </div>
 
       <div class="card bill-step compact-card">
@@ -1655,10 +1681,11 @@
     return `<div class="bill-compact bill-fast">
       <div class="bill-topbar">
         <div class="bill-topbar-main">
-          <div class="bill-top-title">${b.editId ? 'Edit bill' : 'New sale'} <b>${esc(b.editId ? b.editNo : nextNo)}</b></div>
+          <div class="bill-top-title">${b.editId ? 'Edit bill' : (isEst ? 'New estimate' : 'New sale')} <b>${esc(b.editId ? b.editNo : nextNo)}</b></div>
           <div class="sub">${custLabel}</div>
         </div>
         <div class="bill-topbar-actions">
+          ${b.editId ? '' : billKindSeg(b)}
           <button class="btn sm" data-act="pick-cust" data-id="" aria-label="Change customer">Change</button>
           ${b.editId
             ? '<button class="btn sm" data-act="edit-cancel" title="Go back without changing this bill">← Back</button>'
@@ -1718,12 +1745,12 @@
             return `<div class="dc-charge-row"><label class="dc-check-row"><input type="checkbox" data-change="bill-charge" data-id="${i}"${c.on ? ' checked' : ''}> <span>${esc(c.name)}</span></label><div class="dc-right"><span class="dc-box">₹</span><input class="inp dc-amt" type="text" inputmode="decimal" min="0" step="0.01" data-input="bill-charge-amount" data-id="${i}" value="${c.amount || 0}" aria-label="${esc(c.name)} amount"></div></div>`;
           }).join('')}
         </div>` : ''}
-        <div class="dc-total-row"><span>Total Amount</span><b>${money(t.total)}</b></div>
-        <div class="dc-total-row recv"><span>Received</span><b>${money(paid)}</b></div>
-        <div class="dc-total-row due"><span>Balance Due</span><b>${money(Math.max(0, due))}</b></div>
+        <div class="dc-total-row"><span>${isEst ? 'Estimate Amount' : 'Total Amount'}</span><b>${money(t.total)}</b></div>
+        ${isEst ? '' : `<div class="dc-total-row recv"><span>Received</span><b>${money(paid)}</b></div>
+        <div class="dc-total-row due"><span>Balance Due</span><b>${money(Math.max(0, due))}</b></div>`}
       </div>
 
-      <div class="card sale-block">
+      ${isEst ? '' : `<div class="card sale-block">
         <div class="sale-block-head">Payment Details</div>
         <div class="pd-head-row${b.payments.length > 1 ? ' has-rm' : ''}"><span>Payment Type</span><span class="pd-head-amt">Amount</span>${b.payments.length > 1 ? '<span></span>' : ''}</div>
         ${b.payments.map(function (p, i) {
@@ -1743,14 +1770,16 @@
           <button class="btn sm linkish" type="button" data-act="pay-add">+ Add Payment Type</button>
           <button class="btn sm" type="button" data-act="pay-full">Full amount</button>
         </div>
-      </div>
+      </div>`}
 
       <div class="sale-bottom-bar single">
-        <button class="btn primary sale-save-primary" type="button" data-act="save-bill" data-mode="save">Save Bill</button>
+        <button class="btn primary sale-save-primary" type="button" data-act="save-bill" data-mode="save">${isEst ? 'Save Estimate' : 'Save Bill'}</button>
       </div>
       <div class="hint" style="margin:8px 4px 0">${b.editId
         ? 'Stock in ' + esc(branchName(b.editBranch)) + ' updates with your changes.'
-        : 'Stock in ' + esc(branchName(ui.branch)) + ' updates when you save.'}</div>
+        : isEst
+          ? 'Estimate only — stock in ' + esc(branchName(ui.branch)) + ' is not changed.'
+          : 'Stock in ' + esc(branchName(ui.branch)) + ' updates when you save.'}</div>
       ${itemSheetHTML()}
     </div>`;
   }
@@ -2005,7 +2034,8 @@
     var cust = b.customerId ? findCust(b.customerId) : null;
     var itemCount = (b.lines || []).reduce(function (s, l) { return s + (Number(l.qty) || 0); }, 0);
     var editMode = !!b.editId;
-    openModal(editMode ? 'Save changes to ' + (b.editNo || 'this bill') + '?' : 'Save this bill?', `
+    var isEst = !editMode && b.kind === 'estimate';
+    openModal(editMode ? 'Save changes to ' + (b.editNo || 'this bill') + '?' : (isEst ? 'Save this estimate?' : 'Save this bill?'), `
       <div class="card" style="margin:0 0 12px">
         <div class="title" style="font-weight:600">${cust ? esc(cust.name) : 'Walk-in customer'}</div>
         <div class="sub">${num(itemCount)} ${itemCount === 1 ? 'item' : 'items'} · ${esc(branchName(editMode ? b.editBranch : ui.branch))} · ${esc(fmtDate(b.editDate || b.date || today()))}</div>
@@ -2014,16 +2044,18 @@
         <div><span>Subtotal</span><b>${money(t.subtotal)}</b></div>
         ${Number(t.tax) ? `<div><span>Tax</span><b>${money(t.tax)}</b></div>` : ''}
         <div class="big"><span>Total</span><b>${money(t.total)}</b></div>
-        <div><span>Received</span><b>${money(paid)}</b></div>
-        <div class="${due > 0.009 ? 'due' : ''}"><span>Balance due</span><b>${money(due)}</b></div>
+        ${isEst ? '' : `<div><span>Received</span><b>${money(paid)}</b></div>
+        <div class="${due > 0.009 ? 'due' : ''}"><span>Balance due</span><b>${money(due)}</b></div>`}
       </div>
       <div class="hint" style="margin-top:10px">${editMode
         ? 'Save Bill updates this bill and puts the stock difference back in ' + esc(branchName(b.editBranch)) + '.'
-        : 'Save Bill takes the items out of stock in ' + esc(branchName(ui.branch)) + ' and opens the bill to print.'}</div>
+        : isEst
+          ? 'An estimate is a quote — nothing is taken out of stock in ' + esc(branchName(ui.branch)) + '.'
+          : 'Save Bill takes the items out of stock in ' + esc(branchName(ui.branch)) + ' and opens the bill to print.'}</div>
       <div class="row-actions" style="justify-content:flex-end;margin-top:16px">
         <button class="btn" type="button" data-act="bill-save-cancel">Cancel</button>
         <button class="btn" type="button" data-act="bill-save-edit">Edit</button>
-        <button class="btn primary" type="button" data-act="bill-save-yes" data-mode="${mode || 'save'}">Save Bill</button>
+        <button class="btn primary" type="button" data-act="bill-save-yes" data-mode="${mode || 'save'}">${isEst ? 'Save Estimate' : 'Save Bill'}</button>
       </div>`);
   }
 
@@ -2046,6 +2078,7 @@
     var b = ui.bill;
     if (b.editId) return updateInvoice(mode);
     if (!b.lines.length) return toast('Add at least one item');
+    if (b.kind === 'estimate') return saveEstimate();
     var t = billTotals();
     var payments = (b.payments || []).filter(function (p) { return (Number(p.amount) || 0) > 0; })
       .map(function (p) { return { method: p.method, amount: r2(p.amount) }; });
@@ -2086,6 +2119,113 @@
     openBillPreview(inv);
   }
 
+  /* An estimate quotes prices and terms only: no stock leaves the branch and
+     nothing is added to invoices, dues, dashboards or reports. */
+  function saveEstimate() {
+    var b = ui.bill;
+    var t = billTotals();
+    var seq = nextEstSeq();
+    db.ecounter = seq;
+    var staff = S.currentStaff();
+    var est = {
+      id: uid(), no: 'EST-' + seq,
+      date: (b.date && /^\d{4}-\d{2}-\d{2}$/.test(b.date)) ? b.date : today(), created: Date.now(),
+      branchId: ui.branch, staffId: staff ? staff.id : '',
+      customerId: b.customerId || '',
+      lines: b.lines.map(function (l) { return { itemId: l.itemId, name: l.name, qty: l.qty, price: l.price, cost: l.cost, disc: r2(Number(l.disc) || 0), desc: String(l.desc || ''), imei: String(l.imei || ''), serial: String(l.serial || '') }; }),
+      discount: b.discount,
+      taxRate: (db.settings.taxOn !== false && b.taxOn === true ? (Number(db.settings.taxRate) || 0) : 0),
+      charges: billChargesOn(),
+      fields: (db.settings.billFields || [])
+        .map(function (f) { return { label: f.label, value: String((b.fields || {})[f.id] || '').trim() }; })
+        .filter(function (f) { return f.value; }),
+      subtotal: t.subtotal, tax: t.tax, total: t.total,
+      note: '', convertedAt: 0, convertedNo: ''
+    };
+    db.estimates.push(est);
+    logActivity('Saved estimate ' + est.no + ' for ' + (findCust(est.customerId) ? findCust(est.customerId).name : 'walk-in') + ' (' + money(est.total) + ')', 'bill');
+    save();
+    ui.bill = null; newBill();
+    render();
+    toast('Estimate ' + est.no + ' saved');
+    estPreview(est.id);
+  }
+
+  function estPreview(id) {
+    var e = estById(id);
+    if (!e) return toast('Estimate not found');
+    var c = findCust(e.customerId);
+    var t = S.compute(e.lines, e.discount, e.taxRate, e.charges || []);
+    var rows = (e.lines || []).map(function (l) {
+      var amt = r2((Number(l.qty) || 0) * (Number(l.price) || 0) - (Number(l.disc) || 0));
+      var bits = [num(l.qty) + ' × ' + money(l.price)];
+      if (Number(l.disc) > 0) bits.push('− ' + money(l.disc));
+      if (l.desc) bits.push(String(l.desc));
+      return `<div class="est-line"><span class="grow"><b>${esc(l.name)}</b>` +
+        `<span class="sub">${esc(bits.join(' · '))}</span></span><span class="est-amt">${money(amt)}</span></div>`;
+    }).join('');
+    openModal('Estimate ' + e.no, `
+      <div class="est-doc">
+        <div class="est-head">
+          <div><div class="est-cust">${esc(c ? c.name : 'Walk-in customer')}</div>
+            <div class="sub">${esc(fmtDate(e.date))} · ${esc(branchName(e.branchId))}</div></div>
+          <div class="est-total">${money(e.total)}</div>
+        </div>
+        <div class="est-lines">${rows || '<div class="sub">No items on this estimate.</div>'}</div>
+        <div class="p-view-tot">
+          <div><span>Subtotal</span><b>${money(t.subtotal)}</b></div>
+          ${Number(t.tax) > 0.009 ? `<div><span>Tax</span><b>${money(t.tax)}</b></div>` : ''}
+          ${Number(t.discount) > 0.009 ? `<div><span>Discount</span><b>− ${money(t.discount)}</b></div>` : ''}
+          <div class="big"><span>Estimate total</span><b>${money(e.total)}</b></div>
+        </div>
+        <div class="hint" style="margin-top:8px">A quote only — no stock was taken out and this is not counted as a sale.</div>
+      </div>
+      <div class="row-actions" style="justify-content:flex-end;margin-top:14px;flex-wrap:wrap">
+        ${canDeleteEntry('invoice') ? `<button class="btn sm danger ghost" data-act="est-del" data-id="${e.id}">Delete</button>` : ''}
+        <button class="btn" data-act="close-modal">Close</button>
+        <button class="btn primary" data-act="est-to-bill" data-id="${e.id}">Convert to bill</button>
+      </div>`);
+  }
+
+  /* Fills a fresh bill with the estimate's items so it can be saved as a real
+     sale — the stock is only deducted when that bill is saved. */
+  function estToBill(id) {
+    var e = estById(id);
+    if (!e) return toast('Estimate not found');
+    if (!can('bill')) return toast('No permission to bill');
+    closeModal();
+    newBill();
+    ui.bill.customerId = e.customerId || '';
+    ui.bill.customerChosen = true;
+    ui.bill.lines = (e.lines || []).map(function (l) {
+      return { itemId: l.itemId || '', name: l.name, qty: Number(l.qty) || 1, price: Number(l.price) || 0,
+        cost: Number(l.cost) || 0, disc: Number(l.disc) || 0, desc: String(l.desc || ''),
+        imei: String(l.imei || ''), serial: String(l.serial || '') };
+    });
+    ui.bill.discount = Number(e.discount) || 0;
+    (e.charges || []).forEach(function (c) {
+      var hit = (ui.bill.charges || []).filter(function (x) { return x.name === c.name; })[0];
+      if (hit) { hit.on = true; hit.amount = Number(c.amount) || 0; }
+      else ui.bill.charges.push({ name: c.name, amount: Number(c.amount) || 0, on: true });
+    });
+    e.convertedAt = Date.now();
+    save();
+    go('bill');
+    toast('Estimate ' + e.no + ' copied into a bill — stock changes when you save it');
+  }
+
+  function deleteEstimate(id) {
+    var e = estById(id);
+    if (!e) return toast('Estimate not found');
+    if (!canDeleteEntry('invoice')) return toast('You do not have permission to delete estimates');
+    if (!confirm('Delete estimate ' + e.no + '? This cannot be undone.')) return;
+    db.estimates = db.estimates.filter(function (x) { return x.id !== id; });
+    logActivity('Deleted estimate ' + e.no, 'bill');
+    closeModal();
+    save(); render();
+    toast('Estimate ' + e.no + ' deleted');
+  }
+
   /* ---------------------------------------------------------------- invoices */
   /* ------------------------------------------------------------------ filters */
   /* dues only ever count bills of the branch being viewed, the same way the
@@ -2096,9 +2236,12 @@
   }
   function pairs(list) { return list.map(function (x) { return [x, x]; }); }
 
-  function custDues() {
+  /* sc may be 'all' for the all-branch reports, or a branch id; without it the
+     current branch is used, as the dashboard and invoices list already do. */
+  function custDues(sc) {
     var map = {};
-    branchInvoices().forEach(function (i) {
+    var list = sc === 'all' ? db.invoices : branchInvoices(sc);
+    list.forEach(function (i) {
       var d = r2(i.total - i.paid);
       if (d <= 0.009) return;
       var k = i.customerId || 'walkin';
@@ -2449,12 +2592,27 @@
 
   function viewInvoices() {
     invState();
+    var tab = invState().tab;
+    var ests = branchEstimates();
     var st = fState('invoices'), n = fCount('invoices'), qv = st[fQKey('invoices')] || '';
+    var tabsHTML = `<div class="seg inv-tabs" role="group" aria-label="Invoices or estimates">
+      <button type="button" class="${tab === 'est' ? '' : 'on'}" data-act="inv-tab" data-id="bills">Invoices${branchInvoices().length ? ' · ' + branchInvoices().length : ''}</button>
+      <button type="button" class="${tab === 'est' ? 'on' : ''}" data-act="inv-tab" data-id="est">Estimates${ests.length ? ' · ' + ests.length : ''}</button>
+    </div>`;
+    if (tab === 'est') return `<div class="cust-page inv-page">
+      <div class="cust-top">
+        <h2 class="cust-title">Estimates <span class="cust-count">${ests.length}</span></h2>
+        <button type="button" class="cust-add" data-act="new-estimate">+ New estimate</button>
+      </div>
+      ${tabsHTML}
+      <div id="invTable">${estListHTML()}</div>
+    </div>`;
     return `<div class="cust-page inv-page">
       <div class="cust-top">
         <h2 class="cust-title">Invoices <span class="cust-count">${branchInvoices().length}</span></h2>
         <button type="button" class="cust-add" data-act="new-bill">+ New bill</button>
       </div>
+      ${tabsHTML}
       <div class="cust-search">${ico('search')}
         <input class="inp" data-input="f-q" data-view="invoices" placeholder="Search bill no., customer or amount"
           value="${esc(qv)}" autocomplete="off" aria-label="Search invoices">
@@ -2485,6 +2643,27 @@
   function filteredInvoices() {
     return fApply('invoices', branchInvoices().slice().sort(function (a, b) { return (b.created || 0) - (a.created || 0); }));
   }
+  function estListHTML() {
+    var all = branchEstimates().slice().sort(function (a, b) { return (b.created || 0) - (a.created || 0); });
+    if (!all.length) return '<div class="empty"><b>No estimates yet</b>Quotes you save for this branch appear here. They never reduce stock.</div>';
+    return `<div class="cust-list inv-list">${all.map(function (e) {
+      var c = findCust(e.customerId);
+      var items = (e.lines || []).reduce(function (s, l) { return s + (Number(l.qty) || 0); }, 0);
+      return `<div class="cust-row inv-row" data-act="est-view" data-id="${e.id}" tabindex="0" role="button">
+        <span class="cust-main">
+          <span class="cust-name">${esc(e.no)}</span>
+          <span class="cust-sub">${esc(c ? c.name : 'Walk-in customer')}</span>
+        </span>
+        <span class="inv-meta">
+          <span class="inv-amt">${money(e.total)}</span>
+          <span class="inv-subrow"><span class="inv-date">${esc(fmtDate(e.date))}</span>
+            <span class="inv-st ${e.convertedAt ? 'ok' : 'warn'}">${e.convertedAt ? 'Billed' : 'Quote'}</span></span>
+        </span>
+        <button type="button" class="cust-dots" data-act="est-view" data-id="${e.id}" aria-label="Open estimate ${esc(e.no)}">⋮</button>
+      </div>`;
+    }).join('')}</div>`;
+  }
+
   function invoiceListHTML() {
     var st = invState();
     var all = filteredInvoices();
@@ -5185,22 +5364,33 @@
   /* ------------------------------------------------------------------ reports */
   function viewReports() {
     var from = ui.rep.from || today(), to = ui.rep.to || today();
-    var inv = branchInvoices().filter(function (i) { return i.date >= from && i.date <= to; });
+    /* the report reads one branch or, with All branches, every branch at once */
+    if (ui.rep.branch == null) ui.rep.branch = 'all';
+    var sc = ui.rep.branch;
+    if (sc !== 'all' && !S.branchById(sc)) sc = 'all';
+    ui.rep.branch = sc;
+    var scopeName = sc === 'all' ? 'All branches' : branchName(sc);
+    var scopeInvoices = function () { return sc === 'all' ? db.invoices.slice() : branchInvoices(sc); };
+    var scopeExpenses = function () { return sc === 'all' ? db.expenses.slice() : branchExpenses(sc); };
+    var inv = scopeInvoices().filter(function (i) { return i.date >= from && i.date <= to; });
     var sales = 0, tax = 0, cost = 0, disc = 0;
     inv.forEach(function (i) {
       var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i));
       sales += t.taxable; tax += t.tax; cost += t.cost; disc += t.discount;
     });
     var gross = r2(sales - cost);
-    var exp = branchExpenses().filter(function (x) { return x.date >= from && x.date <= to; });
+    var exp = scopeExpenses().filter(function (x) { return x.date >= from && x.date <= to; });
     var expTotal = exp.reduce(function (s, x) { return s + Number(x.amount || 0); }, 0);
     var purch = db.purchases.filter(function (p) { return p.date >= from && p.date <= to; })
       .reduce(function (s, p) {
-        return s + p.lines.reduce(function (n, l) { return n + (Number(l.alloc && l.alloc[ui.branch]) || 0) * (Number(l.cost) || 0); }, 0);
+        return s + p.lines.reduce(function (n, l) {
+          var share = sc === 'all' ? allocTotal(l) : (Number(l.alloc && l.alloc[sc]) || 0);
+          return n + share * (Number(l.cost) || 0);
+        }, 0);
       }, 0);
-    var sret = db.sreturns.filter(function (r) { return r.branchId === ui.branch && r.date >= from && r.date <= to; })
+    var sret = db.sreturns.filter(function (r) { return (sc === 'all' || r.branchId === sc) && r.date >= from && r.date <= to; })
       .reduce(function (s, r) { return s + r.total; }, 0);
-    var dmgTotal = db.damages.filter(function (d) { return d.branchId === ui.branch && d.date >= from && d.date <= to; })
+    var dmgTotal = db.damages.filter(function (d) { return (sc === 'all' || d.branchId === sc) && d.date >= from && d.date <= to; })
       .reduce(function (s, d) { return s + Number(d.costValue || 0); }, 0);
     var net = r2(gross - expTotal - dmgTotal);
     var showProfit = can('profit.view');
@@ -5274,8 +5464,9 @@
 
     var soldIds = {};
     inv.forEach(function (i) { i.lines.forEach(function (l) { if (l.itemId) soldIds[l.itemId] = (soldIds[l.itemId] || 0) + Number(l.qty || 0); }); });
-    var slow = db.items.filter(function (it) { return stockOf(it) > 0 && (soldIds[it.id] || 0) <= 1; })
-      .map(function (it) { return { name: it.name, qty: stockOf(it), value: r2(stockOf(it) * (it.cost || 0)), sold: soldIds[it.id] || 0 }; })
+    var hereStock = function (it) { return sc === 'all' ? S.totalStock(it) : stockOf(it, sc); };
+    var slow = db.items.filter(function (it) { return hereStock(it) > 0 && (soldIds[it.id] || 0) <= 1; })
+      .map(function (it) { return { name: it.name, qty: hereStock(it), value: r2(hereStock(it) * (it.cost || 0)), sold: soldIds[it.id] || 0 }; })
       .sort(function (a, b) { return b.value - a.value; }).slice(0, 5);
 
     var mStart = S.monthStart();
@@ -5287,17 +5478,18 @@
       var d = new Date(mStart + 'T00:00:00'); d.setDate(0);
       return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     })();
-    var thisM = branchInvoices().filter(function (i) { return i.date >= mStart && i.date <= today(); });
-    var lastM = branchInvoices().filter(function (i) { return i.date >= lastStart && i.date <= lastEnd; });
+    var thisM = scopeInvoices().filter(function (i) { return i.date >= mStart && i.date <= today(); });
+    var lastM = scopeInvoices().filter(function (i) { return i.date >= lastStart && i.date <= lastEnd; });
     var sumOf = function (list) { return list.reduce(function (a, i) { return a + Number(i.total || 0); }, 0); };
     var thisSales = r2(sumOf(thisM)), lastSales = r2(sumOf(lastM));
     var delta = lastSales > 0 ? Math.round((thisSales - lastSales) / lastSales * 100) : (thisSales > 0 ? 100 : 0);
     var emiBills = inv.filter(isEmiBill);
     var emiSales = r2(emiBills.reduce(function (a, i) { return a + Number(i.total || 0); }, 0));
     var emiMonthly = r2(emiBills.reduce(function (a, i) { return a + Number((i.emi && i.emi.monthly) || 0); }, 0));
-    var owed = r2(custDues().reduce(function (a, r) { return a + r.due; }, 0));
+    var scDues = custDues(sc);
+    var owed = r2(scDues.reduce(function (a, r) { return a + r.due; }, 0));
     var oweSup = r2(db.suppliers.reduce(function (a, sp) { return a + Math.max(0, lgBalance('suppliers', sp.id)); }, 0));
-    var oweCount = custDues().length;
+    var oweCount = scDues.length;
 
     var byCat = {};
     exp.forEach(function (x) { byCat[x.category] = (byCat[x.category] || 0) + Number(x.amount || 0); });
@@ -5340,12 +5532,18 @@
     return `
       <div class="rep-top">
         <div><h2>Reports</h2>
-          <div class="sub">${esc(branchName(ui.branch))} · ${esc(fmtDate(from))} to ${esc(fmtDate(to))} · ${inv.length} bill${inv.length === 1 ? '' : 's'}</div></div>
+          <div class="sub">${esc(scopeName)} · ${esc(fmtDate(from))} to ${esc(fmtDate(to))} · ${inv.length} bill${inv.length === 1 ? '' : 's'}</div></div>
       </div>
       <div class="rep-chips">
         ${chip('today', 'Today', isToday)}${chip('7', '7 days', is7)}${chip('30', '30 days', is30)}${chip('month', 'This month', isMonth)}
       </div>
       <div class="rep-dates">
+        <label><span>Branch</span><select class="inp" data-change="rep-branch" aria-label="Report branch">
+          <option value="all"${sc === 'all' ? ' selected' : ''}>All branches</option>
+          ${S.visibleBranches().map(function (b) {
+            return `<option value="${b.id}"${b.id === sc ? ' selected' : ''}>${esc(b.name)}</option>`;
+          }).join('')}
+        </select></label>
         <label><span>From</span><input class="inp" type="date" data-input="rep-from" value="${esc(from)}"></label>
         <label><span>To</span><input class="inp" type="date" data-input="rep-to" value="${esc(to)}"></label>
       </div>
@@ -7518,6 +7716,20 @@
     }
     if (action === 'tab') return go(id);
     if (action === 'new-bill') { newBill(); return go('bill'); }
+    if (action === 'new-estimate') { newBill({ kind: 'estimate' }); return go('bill'); }
+    if (action === 'bill-kind') {
+      if (!ui.bill || ui.bill.editId) return;
+      ui.bill.kind = id === 'estimate' ? 'estimate' : 'sale';
+      return render();
+    }
+    if (action === 'inv-tab') {
+      invState().tab = id === 'est' ? 'est' : 'bills';
+      invState().page = 1;
+      return render();
+    }
+    if (action === 'est-view') return estPreview(id);
+    if (action === 'est-to-bill') return estToBill(id);
+    if (action === 'est-del') return deleteEstimate(id);
     if (action === 'tr-new') { newTransfer(); return render(); }
     if (action === 'dash-more') {
       ui.dashMore = ui.dashMore || { complaints: 0, recent: 0 };
@@ -9660,6 +9872,7 @@
       return renderBillPreview(invById(el.getAttribute('data-id')));
     }
     if (kind === 'customer') { ui.bill.customerId = el.value; return; }
+    if (kind === 'rep-branch') { ui.rep.branch = el.value || 'all'; return render(); }
     if (kind === 'f-set') {
       var fv3 = el.getAttribute('data-view'), fk3 = el.getAttribute('data-k');
       if (!fv3 || !fk3) return;
