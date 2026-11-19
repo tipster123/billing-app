@@ -1762,3 +1762,13 @@ html[data-theme="dark"] #pSheetHost .sheet-search .inp {
 @media screen{
   .inv-st.emi{background:rgba(79,70,229,.12);color:var(--brand);border-color:transparent;font-weight:700}
 }
+
+/* item form: products that already exist under a similar name */
+.name-pick{margin-top:6px}
+.name-pick:empty{display:none}
+.name-pick-head{font-size:11.5px;line-height:1.5;color:var(--muted);margin-bottom:2px}
+.name-pick-row{display:flex;align-items:center;gap:8px;padding:6px 8px;margin-top:4px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.name-pick-row .grow{display:flex;flex-direction:column;min-width:0}
+.name-pick-row .nm{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.name-pick-row .sub{font-size:11px}
+.name-pick-row.exact{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 8%, var(--surface))}

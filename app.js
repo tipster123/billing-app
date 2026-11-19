@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v137';
+  var APP_VERSION = 'v138';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -6164,6 +6164,34 @@
     return `<span class="cat-chip-row">${chips}${addBtn}</span>`;
   }
 
+  /* While a name is typed, show the items that already exist under a similar
+     name, so staff can see the product is already added before making a
+     duplicate. */
+  function itemNamePickHTML(q, skipId) {
+    var needle = String(q == null ? '' : q).trim().toLowerCase();
+    if (needle.length < 2) return '';
+    var words = needle.split(/\s+/).filter(Boolean);
+    var list = db.items.filter(function (i) {
+      if (skipId && i.id === skipId) return false;
+      var hay = [i.name || '', i.sku || '', i.category || ''].join(' ').toLowerCase();
+      return words.every(function (w) { return hay.indexOf(w) >= 0; });
+    }).slice(0, 5);
+    if (!list.length) return '';
+    var exact = list.some(function (i) { return String(i.name || '').trim().toLowerCase() === needle; });
+    var head = exact
+      ? 'This item is already added — open it instead of adding it again.'
+      : 'Similar items already exist — check them before adding a new one.';
+    return `<div class="name-pick-head">${head}</div>` + list.map(function (i) {
+      var qty = Number((i.stock || {})[ui.branch]) || 0;
+      var meta = [i.category || '', money(i.price), num(qty) + ' in ' + branchName(ui.branch)].filter(Boolean).join(' · ');
+      var isExact = String(i.name || '').trim().toLowerCase() === needle;
+      return `<div class="name-pick-row${isExact ? ' exact' : ''}">
+        <span class="grow"><span class="nm">${esc(i.name)}</span><span class="sub">${esc(meta)}</span></span>
+        <button type="button" class="btn sm ghost" data-act="item-name-open" data-id="${i.id}">Open</button>
+      </div>`;
+    }).join('');
+  }
+
   function itemModal(id) {
     var it = id ? itemById(id) : null;
     var priceLock = !can('price.edit');
@@ -6173,7 +6201,10 @@
       : '';
     openModal(it ? 'Edit item' : 'Add item', `<form data-form="item">
       <input type="hidden" name="id" value="${it ? it.id : ''}">
-      <div class="field"><label>Item name</label><input class="inp" name="name" required value="${esc(it ? it.name : '')}"></div>
+      <div class="field"><label>Item name</label>
+        <input class="inp" name="name" required autocomplete="off" data-input="item-name" value="${esc(it ? it.name : '')}">
+        <div class="name-pick" id="itemNamePick"></div>
+      </div>
       <div class="grid2">
         <div class="field"><label>SKU / code</label><input class="inp" name="sku" value="${esc(it ? it.sku : '')}"></div>
         <div class="field"><label>Category</label>
@@ -6870,7 +6901,7 @@
   }
 
   function billNotesHTML(inv, d) {
-    var qr = inv.isEstimate ? '' : qrHTML(d.due > 0 ? d.due : d.t.total, inv.no, 'inv-qr');
+    var qr = qrHTML(inv.isEstimate ? d.t.total : (d.due > 0 ? d.due : d.t.total), inv.no, 'inv-qr');
     var hasPay = qr || d.bank.length;
     var s = db.settings || {};
     return `
@@ -7074,7 +7105,7 @@
     var dec = s.printDecimals !== false, grp = s.amountGrouping !== false;
     var bmon = function(n){ return billMoney(n,s); };
     var bnum = function(n){ return billNumFmt(n, dec, grp); };
-    var qr = inv.isEstimate ? '' : qrHTML(d.due > 0 ? d.due : d.t.total, inv.no, 'a5-qr');
+    var qr = qrHTML(inv.isEstimate ? d.t.total : (d.due > 0 ? d.due : d.t.total), inv.no, 'a5-qr');
     var delivery = ((inv.fields || []).filter(function (f) {
       return f && f.value && /(deliver|ship|address)/i.test(f.label || '');
     })[0] || {}).value || (d.c && d.c.address) || '';
@@ -7202,7 +7233,7 @@
         ${(qr || d.bank.length || showTerms) ? `<div class="a5-paybox">
           <div class="a5-pay-left">
             ${qr ? `<div class="a5-qr">${qr}</div>` : ''}
-            ${inv.isEstimate ? `<div class="a5-bank"><div><b>Estimate only.</b></div><div>Prices quoted here are not a sale, and no stock has been issued.</div></div>` : ''}
+            ${inv.isEstimate ? `<div class="a5-bank"><div><b>Estimate only.</b></div><div>Not a sale and no stock issued. Scan the code to pay ${bmon(d.t.total)}.</div></div>` : ''}
             ${d.bank.length ? `<div class="a5-bank">
               ${s.bankName ? `<div>Bank Name: <b>${esc(s.bankName)}</b></div>` : ''}
               ${s.bankAccount ? `<div>Account No: <b>${esc(s.bankAccount)}</b></div>` : ''}
@@ -7239,7 +7270,7 @@
     var charges = invoiceCharges(inv);
     /* the thermal receipt has no bank details block, so it keeps the UPI ID
        under the QR; the invoice layouts print the ID with the bank details. */
-    var qr = inv.isEstimate ? '' : qrHTML(due > 0 ? due : t.total, inv.no, 'rcpt-qr', true);
+    var qr = qrHTML(inv.isEstimate ? t.total : (due > 0 ? due : t.total), inv.no, 'rcpt-qr', true);
     var bmon = function(n){ return billMoney(n,s); };
     var sum = function (label, val, cls) {
       return `<div class="rcpt-row${cls ? ' ' + cls : ''}"><span>${label}</span><span>${val}</span></div>`;
@@ -8432,6 +8463,7 @@
       if (action === 'item-cat-add') toast('Category “' + catName + '” added');
       return;
     }
+    if (action === 'item-name-open') { ui.itemMore = ''; return itemModal(id); }
     if (action === 'item-edit') { ui.itemMore = ''; return itemModal(id); }
     if (action === 'item-del') {
       ui.itemMore = '';
@@ -9784,6 +9816,13 @@
     if (kind === 'item-cat') {
       var catHost2 = document.getElementById('itemCatPick');
       if (catHost2) catHost2.innerHTML = itemCatPickHTML(el.value);
+      return;
+    }
+    if (kind === 'item-name') {
+      var nmHost = document.getElementById('itemNamePick');
+      if (!nmHost) return;
+      var idField = document.querySelector('form[data-form="item"] input[name="id"]');
+      nmHost.innerHTML = itemNamePickHTML(el.value, idField ? idField.value : '');
       return;
     }
     if (kind === 'p-inv-no') { if (pDraft) pDraft.invoiceNo = el.value; return; }
