@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v121';
+  var APP_VERSION = 'v122';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -1131,6 +1131,45 @@
   }
   function targetPct(got, target) {
     return target > 0 ? Math.max(0, Math.round(got / target * 100)) : 0;
+  }
+
+  /* An expense can be linked to one or more bills (one transport charge for two
+     orders, say). Its amount is shared across those bills by bill value, so each
+     bill — and the customer who bought it — carries its own share of the cost. */
+  function linkedExpenseShare(invoice) {
+    if (!invoice || !invoice.id) return 0;
+    var share = 0;
+    db.expenses.forEach(function (x) {
+      var ids = x.linkedBills || [];
+      if (!ids.length || ids.indexOf(invoice.id) < 0) return;
+      var bills = ids.map(invById).filter(Boolean);
+      if (!bills.length) return;
+      var amt = Number(x.amount) || 0;
+      var total = bills.reduce(function (s, b) { return s + (Number(b.total) || 0); }, 0);
+      share += total > 0 ? amt * ((Number(invoice.total) || 0) / total) : amt / bills.length;
+    });
+    return r2(share);
+  }
+  function billProfit(inv) {
+    var t = S.compute(inv.lines, inv.discount, inv.taxRate, invoiceCharges(inv));
+    return r2((t.taxable - t.cost) - linkedExpenseShare(inv));
+  }
+  function customerProfit(cid, from, to) {
+    var out = { n: 0, sales: 0, linked: 0, profit: 0 };
+    db.invoices.forEach(function (i) {
+      if (i.customerId !== cid) return;
+      if (from && i.date < from) return;
+      if (to && i.date > to) return;
+      var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i));
+      out.n++;
+      out.sales += t.taxable;
+      out.profit += (t.taxable - t.cost);
+      out.linked += linkedExpenseShare(i);
+    });
+    out.sales = r2(out.sales);
+    out.linked = r2(out.linked);
+    out.profit = r2(out.profit - out.linked);
+    return out;
   }
 
   function restoreTab() {
@@ -2826,6 +2865,21 @@
       </div>`;
     }
 
+    /* what this customer is worth: their bills minus cost of goods and their
+       share of any expenses linked to those bills */
+    var custBlock = '';
+    if (st.type === 'customers' && can('profit.view')) {
+      var cp = customerProfit(st.entityId, st.from, st.to);
+      custBlock = `<div class="card" style="margin-bottom:12px">
+        <h3>Profit from this customer</h3>
+        <div class="tot"><span>Bills</span><b>${num(cp.n)}</b></div>
+        <div class="tot"><span>Sales (excl. tax)</span><b>${money(cp.sales)}</b></div>
+        ${cp.linked > 0.009 ? `<div class="tot"><span>Linked expenses</span><b>${money(cp.linked)}</b></div>` : ''}
+        <div class="tot"><span>Profit</span><b class="${cp.profit < 0 ? 'bad' : ''}">${money(cp.profit)}</b></div>
+        <div class="hint" style="margin-top:6px">After cost of goods${cp.linked > 0.009 ? " and this customer's share of expenses linked to bills" : ''}${st.from || st.to ? ', for the dates selected' : ''}.</div>
+      </div>`;
+    }
+
     return `
       <div class="row-actions" style="margin-bottom:8px;justify-content:space-between;gap:8px;flex-wrap:wrap">
         <button class="btn sm" type="button" data-act="lg-back">← All ${st.type}</button>
@@ -2840,7 +2894,7 @@
           ${balanceBadge(st.type, party.balance)}</div>
         <div class="sub">${esc(side)} ${money(shownBal)}${party.sub ? ' · ' + esc(party.sub) : ''}</div>
       </div>
-      ${targetBlock}
+      ${targetBlock}${custBlock}
       ${fBar('ledgerEntries')}
       <div id="lgEntries">${entriesTable(shown, label, total, pages, start)}</div>`;
   }
@@ -5007,6 +5061,11 @@
       return r2((Number(l.qty) || 0) * c);
     };
 
+    var byBill = inv.map(function (i) {
+      var c = findCust(i.customerId);
+      return { no: i.no, date: i.date, cust: c ? c.name : 'Walk-in', linked: linkedExpenseShare(i), profit: billProfit(i) };
+    }).sort(function (a, b) { return b.profit - a.profit; }).slice(0, 10);
+
     var byDay = {};
     inv.forEach(function (i) {
       var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i));
@@ -5183,6 +5242,11 @@
       ${showProfit ? secHead('Profit by category') + list(catRows.map(function (t) {
         return row(t.name, num(t.qty) + ' sold · ' + money(t.revenue), money(t.profit), t.profit < 0 ? 'bad' : 'ok');
       }).join(''), 'No sales in this range.') : ''}
+
+      ${showProfit ? secHead('Profit by bill', 'after linked expenses') + list(byBill.map(function (b) {
+        return row(b.no, esc(fmtDate(b.date)) + ' · ' + esc(b.cust) + (b.linked > 0.009 ? ' · expenses ' + money(b.linked) : ''),
+          money(b.profit), b.profit < 0 ? 'bad' : 'ok');
+      }).join(''), 'No bills in this range.') : ''}
 
       ${secHead('Expenses by category')}
       ${list(Object.keys(byCat).sort().map(function (k) {
@@ -5528,7 +5592,7 @@
           <label class="pset-toggle"><span>Terms &amp; Conditions</span><input type="checkbox" name="printTerms"${on('printTerms',1)?' checked':''}></label>
           <label class="pset-toggle"><span>Print Received by details</span><input type="checkbox" name="printReceivedBy"${on('printReceivedBy',1)?' checked':''}></label>
           <label class="pset-toggle"><span>Print Delivered by details</span><input type="checkbox" name="printDeliveredBy"${on('printDeliveredBy',0)?' checked':''}></label>
-          <label class="pset-toggle"><span>Print Signature Text</span><input type="checkbox" name="printSignature"${on('printSignature',0)?' checked':''}></label>
+          <label class="pset-toggle"><span>Authorised signatory on invoice print</span><input type="checkbox" name="printSignature"${on('printSignature',0)?' checked':''}></label>
           <div class="pset-row"><label>Custom Signature Text</label><input class="inp sm" name="signatureText" value="${esc(s.signatureText||'')}" placeholder="Authorised signatory"></div>
           <label class="pset-toggle"><span>Payment mode</span><input type="checkbox" name="printPaymentMode"${on('printPaymentMode',1)?' checked':''}></label>
           <label class="pset-toggle"><span>Print Acknowledgement</span><input type="checkbox" name="printAcknowledgement"${on('printAcknowledgement',0)?' checked':''}></label>
@@ -5774,6 +5838,13 @@
     var amt = x ? Number(x.amount) || 0 : 0;
     var isPaid = x ? expDueOf(x) <= 0.009 : true;
     var balNow = isPaid ? 0 : (x ? expDueOf(x) : amt);
+    var linkedSel = (x && x.linkedBills) || [];
+    var billOpts = db.invoices.filter(function (i) { return i.branchId === ui.branch; })
+      .sort(function (a, b) { return String(b.date).localeCompare(String(a.date)) || (b.created || 0) - (a.created || 0); })
+      .slice(0, 40).map(function (i) {
+        var c = findCust(i.customerId);
+        return `<option value="${i.id}"${linkedSel.indexOf(i.id) > -1 ? ' selected' : ''}>${esc(i.no)} · ${esc(c ? c.name : 'Walk-in')} · ${money(i.total)}</option>`;
+      }).join('');
     openModal(x ? 'Edit expense' : 'Add expense', `<form data-form="expense">
       <input type="hidden" name="id" value="${x ? x.id : ''}">
       <div class="grid2">
@@ -5793,6 +5864,11 @@
         <div class="field"><label>Balance to pay</label><div class="hint" id="expBalHint">${money(balNow)} left to pay${balNow <= 0.009 ? (amt > 0 ? ' — fully paid' : '') : ''}</div></div>
       </div>
       <div class="field"><label>Note</label><input class="inp" name="note" value="${esc(x ? x.note : '')}" placeholder="What was this for?"></div>
+      <details style="margin:2px 0 10px"${linkedSel.length ? ' open' : ''}>
+        <summary style="cursor:pointer;font-weight:600;font-size:13px">Link this expense to bills (optional)</summary>
+        <div class="hint" style="margin:6px 0 8px">Pick the bills this cost belongs to — transport for two orders, for example. The amount is split across them by bill value, so profit per bill and on each customer's ledger includes its share. Use Ctrl (or Cmd) to pick more than one.</div>
+        ${billOpts ? `<select class="inp" name="linkedBills" multiple size="4" aria-label="Bills to link">${billOpts}</select>` : '<div class="hint">No bills in this branch yet.</div>'}
+      </details>
       <div class="hint">Recorded against ${esc(branchName(ui.branch))}. Tick “Paid” if you have already paid this expense. Leave it unticked and the whole amount is kept as balance to pay.</div>
       <div class="row-actions" style="justify-content:flex-end;margin-top:16px">
         <button class="btn" type="button" data-act="close-modal">Cancel</button>
@@ -6381,7 +6457,8 @@
     }
 
     var sigParts = [];
-    if (s.printSignature || layout === 'gst') sigParts.push(`<div class="inv-sign-box"><div class="inv-line">For ${esc(s.business)}</div><div class="inv-sign-line"></div><div class="inv-kicker">${esc(s.signatureText || 'Authorised signatory')}</div></div>`);
+    /* obey the setting for every layout, including GST, so it can be turned off */
+    if (s.printSignature) sigParts.push(`<div class="inv-sign-box"><div class="inv-line">For ${esc(s.business)}</div><div class="inv-sign-line"></div><div class="inv-kicker">${esc(s.signatureText || 'Authorised signatory')}</div></div>`);
     if (s.printReceivedBy) sigParts.push(`<div class="inv-sign-box"><div class="inv-sign-line"></div><div class="inv-kicker">Received by</div></div>`);
     if (s.printDeliveredBy) sigParts.push(`<div class="inv-sign-box"><div class="inv-sign-line"></div><div class="inv-kicker">Delivered by</div></div>`);
     var signature = sigParts.length ? `<div class="inv-sign">${sigParts.join('')}</div>` : '';
@@ -8425,10 +8502,11 @@
          whole amount is carried as balance to pay */
       var paid = data.paidFull ? amount : 0;
       var me = S.currentStaff();
+      var linkedBills = Array.isArray(data.linkedBills) ? data.linkedBills.filter(Boolean) : [];
       var payload = {
         date: data.date || today(), category: data.category || 'Other',
         amount: amount, paid: paid, method: data.method || 'Cash', note: String(data.note || '').trim(),
-        branchId: ui.branch, staffId: me ? me.id : ''
+        branchId: ui.branch, staffId: me ? me.id : '', linkedBills: linkedBills
       };
       if (data.id) {
         var ex = db.expenses.filter(function (x) { return x.id === data.id; })[0];
@@ -9438,6 +9516,11 @@
       var data = {};
       Array.prototype.forEach.call(f.elements, function (field) {
         if (!field.name) return;
+        if (field.multiple) {
+          data[field.name] = Array.prototype.filter.call(field.options, function (o) { return o.selected; })
+            .map(function (o) { return o.value; });
+          return;
+        }
         data[field.name] = field.type === 'checkbox' ? field.checked : field.value;
       });
       submit(f.getAttribute('data-form'), data);
