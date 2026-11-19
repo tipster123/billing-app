@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v128';
+  var APP_VERSION = 'v129';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -6006,17 +6006,23 @@
       </div>
       <label class="check" style="margin:4px 0 14px"><input type="checkbox" name="active"${!s || s.active !== false ? ' checked' : ''}> Account is active</label>
       <div class="section-title" style="margin-top:0">Permissions</div>
-      <div id="permBox">${permHTML(perms)}</div>
+      <div id="permBox">${permHTML(perms, s && s.role === 'owner')}</div>
       <div class="row-actions" style="justify-content:flex-end;margin-top:16px">
         <button class="btn" type="button" data-act="close-modal">Cancel</button>
         <button class="btn primary" type="submit">Save staff</button>
       </div></form>`);
   }
-  function permHTML(perms) {
-    return S.PERM_GROUPS.map(function (g) {
+  /* an owner role always has everything, so its boxes are shown locked —
+     otherwise unticking them looks like it should remove access but cannot */
+  function permHTML(perms, ownerRole) {
+    var lock = !!ownerRole;
+    var note = lock
+      ? '<div class="note" style="margin-bottom:10px">Owner / Admin always has every permission. To limit this login, choose <b>Manager</b> or <b>Cashier</b> in the role above, then tick only what they need.</div>'
+      : '';
+    return note + S.PERM_GROUPS.map(function (g) {
       return `<div class="perm-group"><div class="t">${g.title}</div><div class="perm-grid">
         ${g.keys.map(function (k) {
-          return `<label class="check"><input type="checkbox" name="perm_${k}"${perms.indexOf(k) > -1 ? ' checked' : ''}> ${S.PERM_LABELS[k]}</label>`;
+          return `<label class="check"><input type="checkbox" name="perm_${k}"${perms.indexOf(k) > -1 ? ' checked' : ''}${lock ? ' disabled' : ''}> ${S.PERM_LABELS[k]}</label>`;
         }).join('')}</div></div>`;
     }).join('');
   }
@@ -8218,6 +8224,8 @@
       ui.delDraft = null;
       closeModal();
       if (!dd) return;
+      /* the permission may have changed while this confirmation was open */
+      if (!canDeleteEntry(dd.kind)) { render(); return toast('You do not have permission to delete this'); }
       var done = deleteEntry(dd.kind, dd.id);
       if (!done) { render(); return; }
       save(); render();
@@ -8706,7 +8714,10 @@
       } else {
         sp.id = uid(); sp.created = Date.now(); db.staff.push(sp);
       }
-      save(); closeModal(); render(); return toast('Staff saved');
+      save(); closeModal(); render();
+      return toast(sp.role === 'owner'
+        ? 'Saved — an owner keeps full access, use Manager or Cashier to limit this login'
+        : 'Staff saved');
     }
 
     if (kind === 'branch') {
@@ -9095,7 +9106,7 @@
       s.email = String(data.email || '').trim();
       s.currency = String(data.currency || '\u20B9').trim().slice(0, 3) || '\u20B9';
       logActivity('Updated business details', 'settings');
-      save(); render(); return toast('Business details saved');
+      save(); render(); return toast('Saved');
     }
 
     if (kind === 'invpayment') {
@@ -9191,7 +9202,7 @@
         syncPayments();
       }
       logActivity('Updated bill and receipt settings', 'settings');
-      save(); render(); return toast('Invoice settings saved');
+      save(); render(); return toast('Saved');
     }
 
     if (kind === 'cloud') {
@@ -9205,7 +9216,7 @@
       db.settings.cloud = cc;
       S.save();
       render();
-      toast('Cloud settings saved');
+      toast('Saved');
       if (cloudReady()) { cloudSetStatus('busy', 'Testing the connection…'); cloudPush(false); }
       return;
     }
@@ -9555,7 +9566,7 @@
     if (kind === 'staff-role') {
       var perms = el.value === 'owner' ? S.ALL_PERMS.slice() : (S.ROLE_PERMS[el.value] || []);
       var box = $('#permBox');
-      if (box) box.innerHTML = permHTML(perms);
+      if (box) box.innerHTML = permHTML(perms, el.value === 'owner');
       return;
     }
     if (kind === 'restore') {
