@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v136';
+  var APP_VERSION = 'v137';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -991,6 +991,21 @@
   function branchEstimates(b) {
     return (db.estimates || []).filter(function (e) { return e.branchId === (b || ui.branch); });
   }
+  /* Estimates print with the same document as a bill, so they are handed to the
+     document builders as a bill-shaped object that never carries money
+     received, dues, EMI or payment details. */
+  function estAsDoc(e) {
+    if (!e) return null;
+    return {
+      id: e.id, no: e.no, date: e.date, created: e.created, isEstimate: true,
+      branchId: e.branchId, staffId: e.staffId || '', customerId: e.customerId || '',
+      lines: e.lines || [], discount: e.discount, taxRate: e.taxRate,
+      charges: e.charges || [], fields: e.fields || [], note: '',
+      subtotal: e.subtotal, tax: e.tax, total: e.total,
+      paid: 0, payments: [], emi: null, method: ''
+    };
+  }
+  function docById(id) { return invById(id) || estAsDoc(estById(id)); }
   function billKindSeg(b) {
     var est = b && b.kind === 'estimate';
     return '<div class="seg docseg" role="group" aria-label="Bill or estimate">' +
@@ -1618,9 +1633,7 @@
   }
   function custPickHTML() {
     var q = ui.custQ || '';
-    if (!q) {
-      return '<div class="sub" style="padding:10px 2px 2px">Search by name or phone to find a customer.</div>';
-    }
+    if (!q) return '';
     var list = db.customers.filter(function (c) {
       return match(c.name, q) || match(c.phone, q) || match(c.email, q);
     }).slice(0, 8);
@@ -2151,40 +2164,62 @@
     estPreview(est.id);
   }
 
+  /* An estimate is printed and shared with the very same document a bill
+     uses, so the preview is the bill preview with quote wording and its own
+     actions. */
   function estPreview(id) {
     var e = estById(id);
     if (!e) return toast('Estimate not found');
+    var st = billStyle(ui.previewStyle || (db.settings && db.settings.receiptStyle));
+    ui.previewStyle = st;
+    ui.pdf = null;
     var c = findCust(e.customerId);
-    var t = S.compute(e.lines, e.discount, e.taxRate, e.charges || []);
-    var rows = (e.lines || []).map(function (l) {
-      var amt = r2((Number(l.qty) || 0) * (Number(l.price) || 0) - (Number(l.disc) || 0));
-      var bits = [num(l.qty) + ' × ' + money(l.price)];
-      if (Number(l.disc) > 0) bits.push('− ' + money(l.disc));
-      if (l.desc) bits.push(String(l.desc));
-      return `<div class="est-line"><span class="grow"><b>${esc(l.name)}</b>` +
-        `<span class="sub">${esc(bits.join(' · '))}</span></span><span class="est-amt">${money(amt)}</span></div>`;
-    }).join('');
-    openModal('Estimate ' + e.no, `
-      <div class="est-doc">
-        <div class="est-head">
-          <div><div class="est-cust">${esc(c ? c.name : 'Walk-in customer')}</div>
-            <div class="sub">${esc(fmtDate(e.date))} · ${esc(branchName(e.branchId))}</div></div>
-          <div class="est-total">${money(e.total)}</div>
+    openModal('Estimate ' + esc(e.no), `
+      <div class="bp">
+        <div class="bp-head">
+          <div class="bp-info">
+            <div class="bp-cust">${esc(c ? c.name : 'Walk-in customer')}</div>
+            <div class="bp-meta">${esc(fmtDate(e.date))} · ${esc(branchName(e.branchId))}</div>
+            ${e.convertedAt ? `<div class="bp-meta">Copied into ${esc(e.convertedNo || 'a bill')} — stock moves when that bill is saved.</div>` : ''}
+          </div>
+          <div class="bp-money">
+            <div class="bp-total">${money(e.total)}</div>
+            <div class="bp-status warn">Estimate · no stock moved</div>
+          </div>
         </div>
-        <div class="est-lines">${rows || '<div class="sub">No items on this estimate.</div>'}</div>
-        <div class="p-view-tot">
-          <div><span>Subtotal</span><b>${money(t.subtotal)}</b></div>
-          ${Number(t.tax) > 0.009 ? `<div><span>Tax</span><b>${money(t.tax)}</b></div>` : ''}
-          ${Number(t.discount) > 0.009 ? `<div><span>Discount</span><b>− ${money(t.discount)}</b></div>` : ''}
-          <div class="big"><span>Estimate total</span><b>${money(e.total)}</b></div>
+        <div class="bp-toolbar">
+          <label class="bp-layout">
+            <span>Layout</span>
+            <select class="inp" id="billLayoutSel" data-change="pdf-style" data-id="${e.id}" aria-label="Estimate layout">
+              ${BILL_LAYOUTS.map(function (l) {
+                return `<option value="${l.id}"${l.id === st ? ' selected' : ''}>${l.name}</option>`;
+              }).join('')}
+            </select>
+          </label>
         </div>
-        <div class="hint" style="margin-top:8px">A quote only — no stock was taken out and this is not counted as a sale.</div>
-      </div>
-      <div class="row-actions" style="justify-content:flex-end;margin-top:14px;flex-wrap:wrap">
-        ${canDeleteEntry('invoice') ? `<button class="btn sm danger ghost" data-act="est-del" data-id="${e.id}">Delete</button>` : ''}
-        <button class="btn" data-act="close-modal">Close</button>
-        <button class="btn primary" data-act="est-to-bill" data-id="${e.id}">Convert to bill</button>
+        <div class="bill-preview" data-paper="${billPaper(st)}">
+          <div class="paper-fit">
+            <div class="paper"><div class="inv">${billDocHTML(estAsDoc(e), st)}</div></div>
+          </div>
+        </div>
+        <div class="bp-actions">
+          <div class="bp-main-actions">
+            <button class="btn primary" data-act="pdf-share" data-id="${e.id}">Share PDF</button>
+            <div class="bp-row">
+              <button class="btn" data-act="pdf-download" data-id="${e.id}">Download</button>
+              <button class="btn" data-act="pdf-print" data-id="${e.id}">Print</button>
+              <button class="btn" data-act="pdf-wa" data-id="${e.id}">WhatsApp</button>
+            </div>
+          </div>
+          <div class="bp-section bp-manage">
+            <button class="btn sm primary-soft" data-act="est-to-bill" data-id="${e.id}">Convert to bill</button>
+            ${canDeleteEntry('invoice') ? `<button class="btn sm danger ghost" data-act="est-del" data-id="${e.id}">Delete</button>` : ''}
+            <button class="btn sm ghost" data-act="close-modal">Close</button>
+          </div>
+        </div>
       </div>`);
+    fitPaper();
+    pdfFor(e.id, st);
   }
 
   /* Fills a fresh bill with the estimate's items so it can be saved as a real
@@ -6750,22 +6785,25 @@
 
   function billData(inv) {
     var s = db.settings;
+    var est = !!inv.isEstimate;
     var t = S.compute(inv.lines, inv.discount, inv.taxRate, invoiceCharges(inv));
     var discParts = billDiscParts(inv);
     var c = findCust(inv.customerId), st = staffById(inv.staffId), br = S.branchById(inv.branchId);
-    var due = r2(inv.total - inv.paid);
-    var pays = (inv.payments || []).filter(function (x) { return Number(x.amount) > 0; });
+    var due = est ? 0 : r2(inv.total - inv.paid);
+    var pays = est ? [] : (inv.payments || []).filter(function (x) { return Number(x.amount) > 0; });
     var addr = s.invoiceAddress || ((br ? br.name : '') + (br && br.address ? ' · ' + br.address : ''));
     var terms = s.printTerms !== false ? termsList() : [];
     var charges = invoiceCharges(inv);
-    var bank = s.showBankOnInvoice !== false ? [
+    /* a quote asks for nothing yet, so no amount-due QR or bank block */
+    var bank = (est || s.showBankOnInvoice === false) ? [] : [
       s.bankName ? 'Bank ' + s.bankName : '',
       s.bankAccountName ? 'A/c name ' + s.bankAccountName : '',
       s.bankAccount ? 'A/c ' + s.bankAccount : '',
       s.bankIfsc ? 'IFSC ' + s.bankIfsc : '',
       s.upiId ? 'UPI ' + s.upiId : ''
-    ].filter(Boolean) : [];
-    var status = due <= 0.009 ? { cls: 'paid', txt: 'Paid in full' }
+    ].filter(Boolean);
+    var status = est ? { cls: 'unpaid', txt: 'Estimate · not a sale' }
+      : due <= 0.009 ? { cls: 'paid', txt: 'Paid in full' }
       : inv.paid > 0.009 ? { cls: 'part', txt: 'Balance ' + money(due) }
       : { cls: 'unpaid', txt: 'Unpaid' };
     var contact = [s.phone, s.email].filter(Boolean).join(' · ');
@@ -6825,14 +6863,14 @@
       if (emi.months) out += sum('Tenure', num(emi.months) + (emi.months === 1 ? ' month' : ' months'));
     }
     if (s.printBalance !== false && d.due > 0.009) out += sum('Balance due', bmon(d.due), 'due');
-    if (s.printCurrentBalance !== false) out += sum('Current balance', bmon(r2(prev + d.due)), 'due');
+    if (s.printCurrentBalance !== false && !inv.isEstimate) out += sum('Current balance', bmon(r2(prev + d.due)), 'due');
     var saved = r2((Number(d.lineDisc)||0) + (Number(d.billDisc)||0));
     if (s.printYouSaved !== false && saved > 0) out += sum('You saved', bmon(saved));
     return out;
   }
 
   function billNotesHTML(inv, d) {
-    var qr = qrHTML(d.due > 0 ? d.due : d.t.total, inv.no, 'inv-qr');
+    var qr = inv.isEstimate ? '' : qrHTML(d.due > 0 ? d.due : d.t.total, inv.no, 'inv-qr');
     var hasPay = qr || d.bank.length;
     var s = db.settings || {};
     return `
@@ -6871,7 +6909,7 @@
     var contactLine = parts.filter(Boolean).join(' · ');
     var showName = s.printCompanyName !== false;
     var showAddr = s.printAddress !== false && d.addr;
-    var ttl = billTitle(layout) + (s.printOriginalDuplicate ? ' (Original)' : '');
+    var ttl = billTitle(layout, inv) + (s.printOriginalDuplicate ? ' (Original)' : '');
     var head = '';
 
     if (layout === 'modern') {
@@ -6895,7 +6933,7 @@
           ${d.c && d.c.phone ? `<div class="inv-line">${esc(d.c.phone)}</div>` : ''}</div>
         <div class="inv-cell"><div class="inv-kicker">Branch</div><div class="inv-strong">${esc(d.br ? d.br.name : '—')}</div></div>
         <div class="inv-cell"><div class="inv-kicker">Billed by</div><div class="inv-strong">${esc(d.st ? d.st.name : '—')}</div></div>
-        <div class="inv-cell"><div class="inv-kicker">Payment</div><div class="inv-strong">${esc(payMixText(inv))}</div></div>
+        ${inv.isEstimate ? '' : `<div class="inv-cell"><div class="inv-kicker">Payment</div><div class="inv-strong">${esc(payMixText(inv))}</div></div>`}
       </div>`;
     } else if (layout === 'gst') {
       head = `<header class="inv-gst-head">
@@ -6906,10 +6944,10 @@
         <div class="inv-gst-title">${esc(ttl)}</div>
       </header>
       <div class="inv-gst-meta">
-        <div><span>Invoice no.</span><b>${esc(inv.no)}</b></div>
+        <div><span>${inv.isEstimate ? 'Estimate no.' : 'Invoice no.'}</span><b>${esc(inv.no)}</b></div>
         <div><span>Date</span><b>${esc(fmtDate(inv.date))}</b></div>
         <div><span>Branch</span><b>${esc(d.br ? d.br.name : '—')}</b></div>
-        <div><span>Payment</span><b>${esc(payMixText(inv))}</b></div>
+        ${inv.isEstimate ? '' : `<div><span>Payment</span><b>${esc(payMixText(inv))}</b></div>`}
       </div>
       <div class="inv-gst-parties">
         <div class="inv-gst-party"><span>Billed to</span>
@@ -6944,7 +6982,7 @@
         ${signature}
         ${s.printAcknowledgement ? `<div class="inv-block" style="margin-top:6px"><div class="inv-line"><b>Acknowledgement:</b> Received with thanks.</div></div>` : ''}
         <footer class="inv-foot">
-          <span>${d.due > 0.009 ? 'Please pay the balance by the due date.' : 'Paid in full — thank you.'}</span>
+          <span>${inv.isEstimate ? 'Estimate only — not a tax invoice.' : (d.due > 0.009 ? 'Please pay the balance by the due date.' : 'Paid in full — thank you.')}</span>
           <span>${showName ? esc(s.business) : ''}${showName && s.printPhone!==false && s.phone ? ' · ' : ''}${s.printPhone!==false && s.phone ? esc(s.phone) : ''}</span>
         </footer>
       </div>
@@ -7015,7 +7053,8 @@
     return sym + ' ' + billNumFmt(n, dec, grp);
   }
   function a5Num(n) { return billNumFmt(n, (db.settings||{}).printDecimals !== false, (db.settings||{}).amountGrouping !== false); }
-  function billTitle(st) {
+  function billTitle(st, inv) {
+    if (inv && inv.isEstimate) return 'Estimate';
     var s = db.settings || {}, name = String(s.txnSaleName || 'Invoice').trim() || 'Invoice';
     if (st === 'a5') return name === 'Invoice' ? 'Sales Invoice' : name;
     if (st === 'gst') return s.printBillOfSupply && s.taxOn === false ? 'Bill of Supply' : (name === 'Invoice' ? 'Tax invoice' : name);
@@ -7035,7 +7074,7 @@
     var dec = s.printDecimals !== false, grp = s.amountGrouping !== false;
     var bmon = function(n){ return billMoney(n,s); };
     var bnum = function(n){ return billNumFmt(n, dec, grp); };
-    var qr = qrHTML(d.due > 0 ? d.due : d.t.total, inv.no, 'a5-qr');
+    var qr = inv.isEstimate ? '' : qrHTML(d.due > 0 ? d.due : d.t.total, inv.no, 'a5-qr');
     var delivery = ((inv.fields || []).filter(function (f) {
       return f && f.value && /(deliver|ship|address)/i.test(f.label || '');
     })[0] || {}).value || (d.c && d.c.address) || '';
@@ -7079,7 +7118,7 @@
     var showPhone = s.printPhone !== false && s.phone;
     var showEmail = s.printEmail !== false && s.email;
     var showGstin = !!(s.printGstin && s.gstin);
-    var title = billTitle('a5') + (s.printOriginalDuplicate ? ' (Original)' : '');
+    var title = billTitle('a5', inv) + (s.printOriginalDuplicate ? ' (Original)' : '');
     var topSpace = s.extraTopSpace ? `<div style="height:${Math.max(0,Math.min(30,s.extraTopSpace|0))}mm"></div>` : '';
     var showQty = s.printTotalQty !== false;
     var showRecv = s.printReceived !== false;
@@ -7090,10 +7129,10 @@
     var showTerms = s.printTerms !== false && d.terms.length;
     var amtRow = `<div>Total: <b>${bmon(d.t.total)}</b><span class="a5-words">(${esc(amountInWords(d.t.total, s.amountWordsFormat || 'indian'))})</span></div>`;
     var strip5 = [];
-    if (showRecv) strip5.push(`<div>Received: <b>${bmon(received)}</b></div>`);
-    if (showBal) strip5.push(`<div>Balance: <b>${bmon(balance)}</b></div>`);
-    if (showCurBal) strip5.push(`<div>Previous Balance: <b>${bmon(prev)}</b></div>`);
-    if (showCurBal) strip5.push(`<div>Current Balance: <b>${bmon(r2(prev + balance))}</b></div>`);
+    if (showRecv && !inv.isEstimate) strip5.push(`<div>Received: <b>${bmon(received)}</b></div>`);
+    if (showBal && !inv.isEstimate) strip5.push(`<div>Balance: <b>${bmon(balance)}</b></div>`);
+    if (showCurBal && !inv.isEstimate) strip5.push(`<div>Previous Balance: <b>${bmon(prev)}</b></div>`);
+    if (showCurBal && !inv.isEstimate) strip5.push(`<div>Current Balance: <b>${bmon(r2(prev + balance))}</b></div>`);
     var _savedA5 = r2((Number(d.lineDisc)||0) + (Number(d.billDisc)||0));
     if (showYouSaved && _savedA5 > 0) strip5.push(`<div>You Saved: <b>${bmon(_savedA5)}</b></div>`);
     var footBits = [];
@@ -7116,7 +7155,7 @@
             </div>
           </div>
           <div class="a5-head-right">
-            <div>Invoice No: <b>${esc(inv.no)}</b></div>
+            <div>${inv.isEstimate ? 'Estimate No' : 'Invoice No'}: <b>${esc(inv.no)}</b></div>
             <div>Date: <b>${esc(fmtDate(inv.date))}</b></div>
             ${d.br ? `<div>Place of Supply: <b>${esc(d.br.name)}</b></div>` : ''}
           </div>
@@ -7158,11 +7197,12 @@
           <div style="padding:4px 8px">Total: <b>${bmon(d.t.total)}</b> (${esc(amountInWords(d.t.total, s.amountWordsFormat || 'indian'))})</div>
         </div>
         ${strip5.length ? `<div class="a5-strip a5-strip-5">${strip5.join('')}</div>` : ''}
-        ${showPayMode ? `<div class="a5-strip">Payment Mode: <b>${esc(payMixText(inv))}</b></div>` : ''}
+        ${showPayMode && !inv.isEstimate ? `<div class="a5-strip">Payment Mode: <b>${esc(payMixText(inv))}</b></div>` : ''}
         ${inv.emi && (inv.emi.finance || inv.emi.monthly || inv.emi.months) ? `<div class="a5-strip">EMI${inv.emi.finance ? `: <b>${esc(inv.emi.finance)}</b>` : ''}${inv.emi.monthly ? ` · <b>${bmon(inv.emi.monthly)}</b>/month` : ''}${inv.emi.months ? ` × ${num(inv.emi.months)} months` : ''}${inv.emi.date ? ` from ${esc(fmtDate(inv.emi.date))}` : ''}</div>` : ''}
         ${(qr || d.bank.length || showTerms) ? `<div class="a5-paybox">
           <div class="a5-pay-left">
             ${qr ? `<div class="a5-qr">${qr}</div>` : ''}
+            ${inv.isEstimate ? `<div class="a5-bank"><div><b>Estimate only.</b></div><div>Prices quoted here are not a sale, and no stock has been issued.</div></div>` : ''}
             ${d.bank.length ? `<div class="a5-bank">
               ${s.bankName ? `<div>Bank Name: <b>${esc(s.bankName)}</b></div>` : ''}
               ${s.bankAccount ? `<div>Account No: <b>${esc(s.bankAccount)}</b></div>` : ''}
@@ -7192,14 +7232,14 @@
   function billReceiptHTML(inv) {
     var s = db.settings, t = S.compute(inv.lines, inv.discount, inv.taxRate, invoiceCharges(inv));
     var c = findCust(inv.customerId), st = staffById(inv.staffId), br = S.branchById(inv.branchId);
-    var due = r2(inv.total - inv.paid);
-    var pays = (inv.payments || []).filter(function (x) { return Number(x.amount) > 0; });
+    var due = inv.isEstimate ? 0 : r2(inv.total - inv.paid);
+    var pays = inv.isEstimate ? [] : (inv.payments || []).filter(function (x) { return Number(x.amount) > 0; });
     var addr = s.invoiceAddress || ((br ? br.name : '') + (br && br.address ? ', ' + br.address : ''));
     var terms = s.printTerms !== false ? termsList() : [];
     var charges = invoiceCharges(inv);
     /* the thermal receipt has no bank details block, so it keeps the UPI ID
        under the QR; the invoice layouts print the ID with the bank details. */
-    var qr = qrHTML(due > 0 ? due : t.total, inv.no, 'rcpt-qr', true);
+    var qr = inv.isEstimate ? '' : qrHTML(due > 0 ? due : t.total, inv.no, 'rcpt-qr', true);
     var bmon = function(n){ return billMoney(n,s); };
     var sum = function (label, val, cls) {
       return `<div class="rcpt-row${cls ? ' ' + cls : ''}"><span>${label}</span><span>${val}</span></div>`;
@@ -7212,7 +7252,7 @@
         ${s.printAddress!==false && addr ? `<div class="rcpt-center rcpt-sub">${esc(addr)}</div>` : ''}
         ${contact ? `<div class="rcpt-center rcpt-sub">${esc(contact)}</div>` : ''}
         <div class="rcpt-rule"></div>
-        <div class="rcpt-center rcpt-strong">${esc((s.txnSaleName||'Invoice') + ' ' + inv.no)}${s.printOriginalDuplicate ? ' (Original)' : ''}</div>
+        <div class="rcpt-center rcpt-strong">${esc(billTitle('receipt', inv) + ' ' + inv.no)}${s.printOriginalDuplicate ? ' (Original)' : ''}</div>
         <div class="rcpt-center rcpt-sub">${esc(fmtDate(inv.date))}${st ? ' · ' + esc(st.name) : ''}</div>
         <div class="rcpt-sub" style="margin-top:4px">${esc(c ? c.name : 'Walk-in customer')}${c && c.phone ? ' · ' + esc(c.phone) : ''}</div>
         <div class="rcpt-rule"></div>
@@ -7236,7 +7276,7 @@
         ${sum('Total', bmon(t.total) + ' (' + esc(amountInWords(t.total, s.amountWordsFormat || 'indian')) + ')', 'strong')}
         ${s.printReceived!==false ? (pays.length ? pays.map(function (x) { return sum(esc(x.method), bmon(x.amount)); }).join('') : (Number(inv.paid) > 0 ? sum('Paid', bmon(inv.paid)) : '')) : ''}
         ${s.printBalance!==false && due > 0.009 ? sum('Balance due', bmon(due), 'due') : ''}
-        ${s.printPaymentMode!==false ? sum('Payment mode', esc(payMixText(inv))) : ''}
+        ${s.printPaymentMode!==false && !inv.isEstimate ? sum('Payment mode', esc(payMixText(inv))) : ''}
         ${inv.emi && inv.emi.finance ? sum('Finance', esc(inv.emi.finance)) : ''}
         ${inv.emi && inv.emi.monthly ? sum('Monthly EMI', bmon(inv.emi.monthly)) : ''}
         ${inv.emi && inv.emi.months ? sum('Tenure', num(inv.emi.months) + ' months') : ''}
@@ -7245,7 +7285,7 @@
         ${qr ? `<div class="rcpt-center" style="margin:6px 0">${qr}</div>` : ''}
         ${s.printTerms!==false && terms.length ? `<div class="rcpt-sub" style="margin-top:4px">${terms.slice(0,4).map(function (x,i){ return (i+1)+'. '+esc(x); }).join('<br>')}</div>` : ''}
         ${s.printAcknowledgement ? `<div class="rcpt-center rcpt-sub" style="margin-top:4px">Received with thanks.</div>` : ''}
-        <div class="rcpt-center rcpt-sub" style="margin-top:8px">${due > 0.009 ? 'Balance due — please pay.' : 'Paid in full — thank you.'}</div>
+        <div class="rcpt-center rcpt-sub" style="margin-top:8px">${inv.isEstimate ? 'Estimate only — not a tax invoice.' : (due > 0.009 ? 'Balance due — please pay.' : 'Paid in full — thank you.')}</div>
       </div>`;
   }
 
@@ -7369,7 +7409,7 @@
   }
 
   function pdfFor(invId, style) {
-    var inv = invById(invId);
+    var inv = docById(invId);
     if (!inv) return Promise.resolve(null);
     var st = billStyle(style || ui.previewStyle || (db.settings && db.settings.receiptStyle));
     if (ui.pdf && ui.pdf.id === invId && ui.pdf.style === st && ui.pdf.promise) return ui.pdf.promise;
@@ -7538,7 +7578,7 @@
   }
 
   function billImageFor(invId, style) {
-    var inv = invById(invId);
+    var inv = docById(invId);
     if (!inv) return Promise.resolve(null);
     var st = billStyle(style || ui.previewStyle || (db.settings && db.settings.receiptStyle));
     return buildDocCanvas(inv, st).then(function (canvas) {
@@ -7550,13 +7590,19 @@
     }).catch(function () { return null; });
   }
 
+  function docKindName(invId, style) {
+    var doc = docById(invId);
+    if (doc && doc.isEstimate) return 'Estimate';
+    return billIsReceipt(style) ? 'Receipt' : 'Bill';
+  }
+
   function downloadPdf(invId, style) {
     var p0 = pdfFor(invId, style);
     toast('Preparing PDF…');
     p0.then(function (p) {
       if (!p) return toast('Could not create the PDF');
       if (!savePdfFile(p)) return toast('This browser cannot save the PDF');
-      toast((billIsReceipt(p.style) ? 'Receipt' : 'Bill') + ' downloaded');
+      toast(docKindName(invId, p.style) + ' downloaded');
     });
   }
 
@@ -7572,7 +7618,7 @@
           }
         }
       } catch (e) {}
-      if (savePdfFile(p)) toast((billIsReceipt(p.style) ? 'Receipt' : 'Bill') + ' downloaded');
+      if (savePdfFile(p)) toast(docKindName(invId, p.style) + ' downloaded');
       else toast('This browser cannot share the PDF');
     });
   }
@@ -7581,12 +7627,13 @@
     toast('Preparing image…');
     billImageFor(invId, style).then(function (img) {
       if (!img) return toast('Could not create the image');
-      var inv = invById(invId);
+      var inv = docById(invId);
       var c = inv ? findCust(inv.customerId) : null;
       var due = inv ? r2(inv.total - inv.paid) : 0;
       var st = img.style || billStyle(style);
-      var msg = (billIsReceipt(st) ? 'Receipt ' : 'Bill ') + (img.no || '') + (c ? ' for ' + c.name : '') +
-        (inv ? ' — ' + pdfMoney(inv.total) + (due > 0.009 ? ' (' + pdfMoney(due) + ' due)' : ' — paid') : '');
+      var head = (inv && inv.isEstimate) ? 'Estimate ' : (billIsReceipt(st) ? 'Receipt ' : 'Bill ');
+      var msg = head + (img.no || '') + (c ? ' for ' + c.name : '') +
+        (inv ? ' — ' + pdfMoney(inv.total) + (inv.isEstimate ? '' : (due > 0.009 ? ' (' + pdfMoney(due) + ' due)' : ' — paid')) : '');
       try {
         if (navigator.share && typeof File === 'function' && img.blob) {
           var file = new File([img.blob], img.name + '.jpg', { type: 'image/jpeg' });
@@ -7685,7 +7732,7 @@
   }
 
   function printInvoice(id, style) {
-    var inv = invById(id);
+    var inv = docById(id);
     if (!inv) return;
     var st = billStyle(style || ui.previewStyle || (db.settings && db.settings.receiptStyle));
     var page = document.getElementById('printPage');
@@ -8054,7 +8101,7 @@
     if (action === 'pdf-style') {
       ui.previewStyle = billStyle(el && el.getAttribute('data-val'));
       ui.pdf = null;
-      return renderBillPreview(invById(id));
+      return invById(id) ? renderBillPreview(invById(id)) : estPreview(id);
     }
 
     if (action === 'dues-open') return duesModal(id);
@@ -9869,7 +9916,8 @@
     if (kind === 'pdf-style') {
       ui.previewStyle = billStyle(el.value);
       ui.pdf = null;
-      return renderBillPreview(invById(el.getAttribute('data-id')));
+      var pid = el.getAttribute('data-id');
+      return invById(pid) ? renderBillPreview(invById(pid)) : estPreview(pid);
     }
     if (kind === 'customer') { ui.bill.customerId = el.value; return; }
     if (kind === 'rep-branch') { ui.rep.branch = el.value || 'all'; return render(); }
