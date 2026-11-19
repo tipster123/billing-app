@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v120';
+  var APP_VERSION = 'v121';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -1030,6 +1030,11 @@
       }
     }
     $('#pageTitle').textContent = (ui.tab === 'bill' && ui.bill && ui.bill.editId) ? 'Edit bill ' + ui.bill.editNo : tab.title;
+    var topBranch = $('#topBranch');
+    if (topBranch) {
+      topBranch.textContent = branchName(ui.branch);
+      topBranch.title = 'Branch: ' + branchName(ui.branch);
+    }
     $('#bizName').textContent = db.settings.business || 'My Store';
     $('#bizSub').textContent = branchName(ui.branch);
     $('#whoName').textContent = staff.name;
@@ -1099,6 +1104,35 @@
 
   function branchExpenses(b) { return db.expenses.filter(function (x) { return x.branchId === (b || ui.branch); }); }
 
+  /* Branch targets are monthly. Sales is what the branch billed; profit is what
+     is left of it after cost of goods, that branch's expenses and damage. */
+  function branchTargets() {
+    if (!db.settings.branchTargets || typeof db.settings.branchTargets !== 'object') db.settings.branchTargets = {};
+    return db.settings.branchTargets;
+  }
+  function branchTarget(branchId) {
+    var t = branchTargets()[branchId] || {};
+    return { sales: Math.max(0, Number(t.sales) || 0), profit: Math.max(0, Number(t.profit) || 0) };
+  }
+  function branchMonthStats(branchId) {
+    var from = S.monthStart(), to = today();
+    var sales = 0, gross = 0;
+    db.invoices.forEach(function (i) {
+      if (i.branchId !== branchId || i.date < from || i.date > to) return;
+      var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i));
+      sales += t.taxable;
+      gross += (t.taxable - t.cost);
+    });
+    var exp = db.expenses.filter(function (x) { return x.branchId === branchId && x.date >= from && x.date <= to; })
+      .reduce(function (s, x) { return s + Number(x.amount || 0); }, 0);
+    var dmg = db.damages.filter(function (d) { return d.branchId === branchId && d.date >= from && d.date <= to; })
+      .reduce(function (s, d) { return s + Number(d.costValue || 0); }, 0);
+    return { sales: r2(sales), profit: r2(gross - exp - dmg) };
+  }
+  function targetPct(got, target) {
+    return target > 0 ? Math.max(0, Math.round(got / target * 100)) : 0;
+  }
+
   function restoreTab() {
     var last = '';
     try { last = sessionStorage.getItem('billing.tab') || ''; } catch (e) {}
@@ -1163,7 +1197,7 @@
     var dc = (db.settings && db.settings.dashboard) || { view:'compact', cards:{salesToday:true,salesMonth:true,expensesMonth:true,unpaid:true,myTarget:true}, sections:[{id:'eod',on:true},{id:'kpis',on:true},{id:'target',on:true},{id:'attention',on:true},{id:'complaints',on:true},{id:'collect',on:true},{id:'recent',on:true},{id:'low',on:true}], limits:{recent:40,low:4,collect:3} };
     var secOn = function(id){ var x = (dc.sections||[]).filter(function(s){return s.id===id;})[0]; return !x || x.on !== false; };
     var secOrder = (dc.sections||[]).map(function(s){return s.id;});
-    ['eod','kpis','target','attention','complaints','collect','recent','low'].forEach(function(id){ if(secOrder.indexOf(id)<0) secOrder.push(id); });
+    ['eod','kpis','target','btargets','attention','complaints','collect','recent','low'].forEach(function(id){ if(secOrder.indexOf(id)<0) secOrder.push(id); });
     if (secOrder.indexOf('complaints') > secOrder.indexOf('recent') && secOrder.indexOf('collect') >= 0) {
       secOrder.splice(secOrder.indexOf('complaints'), 1);
       secOrder.splice(secOrder.indexOf('collect'), 0, 'complaints');
@@ -1266,6 +1300,25 @@
       return '<div class="dash-goal">' +
         '<div class="dash-goal-top"><span>My target \u00b7 ' + money(mySales) + ' of ' + money(myTarget) + '</span><b>' + myPct + '%</b></div>' +
         '<div class="bar"><span style="width:' + myPct + '%"></span></div></div>';
+    };
+    var goalBar = function(label, got, target){
+      var pc = targetPct(got, target);
+      return '<div class="dash-goal">' +
+        '<div class="dash-goal-top"><span>' + esc(label) + ' \u00b7 ' + money(got) + ' of ' + money(target) + '</span><b>' + pc + '%</b></div>' +
+        '<div class="bar"><span style="width:' + Math.min(100, pc) + '%"></span></div></div>';
+    };
+    sec.btargets = function(){
+      var showProfit = can('profit.view');
+      var bars = '';
+      S.visibleBranches().forEach(function (b) {
+        var tg = branchTarget(b.id);
+        if (!tg.sales && !(tg.profit && showProfit)) return;
+        var st = branchMonthStats(b.id);
+        if (tg.sales) bars += goalBar(b.name + ' \u00b7 Sales', st.sales, tg.sales);
+        if (tg.profit && showProfit) bars += goalBar(b.name + ' \u00b7 Profit', st.profit, tg.profit);
+      });
+      if (!bars) return '';
+      return secHead('Targets \u00b7 this month') + bars;
     };
     sec.attention = function(){
       var rows = '';
@@ -4912,7 +4965,7 @@
 
   /* ------------------------------------------------------------------ reports */
   function viewReports() {
-    var from = ui.rep.from || S.monthStart(), to = ui.rep.to || today();
+    var from = ui.rep.from || today(), to = ui.rep.to || today();
     var inv = branchInvoices().filter(function (i) { return i.date >= from && i.date <= to; });
     var sales = 0, tax = 0, cost = 0, disc = 0;
     inv.forEach(function (i) {
@@ -5363,6 +5416,22 @@
           <button class="btn" data-act="backup">Download backup</button>
           <label class="btn" style="cursor:pointer">Restore backup<input type="file" accept="application/json,.json" data-change="restore" hidden></label>
         </div></div>
+
+      ${S.isOwner() ? `<div class="card"><h3>Branch targets</h3>
+        <div class="sub" style="margin-bottom:12px">Monthly targets for each branch, measured against this month's sales. Staff see the sales target; the profit target is yours only. Profit is what is left after cost, expenses and damage.</div>
+        <form data-form="branch-targets">
+          ${db.branches.map(function (b) {
+            var tg = branchTarget(b.id);
+            return `<div class="grid2" style="align-items:end;margin-bottom:10px">
+              <div class="field"><label>${esc(b.name)} · Sales target</label>
+                <input class="inp" type="number" min="0" step="1" name="sales_${b.id}" value="${tg.sales || ''}" placeholder="0" autocomplete="off"></div>
+              <div class="field"><label>Profit target</label>
+                <input class="inp" type="number" min="0" step="1" name="profit_${b.id}" value="${tg.profit || ''}" placeholder="0" autocomplete="off"></div>
+            </div>`;
+          }).join('')}
+          <div class="row-actions" style="justify-content:flex-end"><button class="btn primary" type="submit">Save targets</button></div>
+        </form>
+      </div>` : ''}
 
       <div class="card"><h3>App version</h3>
         <div class="sub" style="margin-bottom:10px">The copy of the app running on this device. Mention this if something looks wrong.</div>
@@ -8783,6 +8852,19 @@
       save(); render(); return toast('Business details saved');
     }
 
+    if (kind === 'branch-targets') {
+      if (!S.isOwner()) return toast('Only the owner can set targets');
+      var bt = branchTargets();
+      db.branches.forEach(function (b) {
+        var ts = Math.max(0, r2(Number(data['sales_' + b.id]) || 0));
+        var tp = Math.max(0, r2(Number(data['profit_' + b.id]) || 0));
+        if (ts || tp) bt[b.id] = { sales: ts, profit: tp };
+        else delete bt[b.id];
+      });
+      logActivity('Updated branch targets', 'settings');
+      save(); render(); return toast('Branch targets saved');
+    }
+
     if (kind === 'invpayment') {
       var ip = invById(data.invId);
       if (!ip) return toast('Bill not found');
@@ -9305,7 +9387,7 @@
     var mode = ap.mode || S.getTheme() || 'light';
     var color = ap.color || 'red';
     applyTheme(mode, color);
-    ui.rep.from = S.monthStart();
+    ui.rep.from = today();
     ui.rep.to = today();
     if (S.currentStaff()) { ui.branch = startBranchId(); restoreTab(); }
     newBill();
@@ -9396,7 +9478,7 @@
       if (!restored) return;
       var ap2 = (db.settings && db.settings.appearance) || {};
       applyTheme(ap2.mode, ap2.color);
-      ui.rep.from = S.monthStart();
+      ui.rep.from = today();
       ui.rep.to = today();
       ui.branch = startBranchId();
       if (S.currentStaff()) {

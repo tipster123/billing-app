@@ -163,6 +163,19 @@
     display:grid;place-items:center;
     box-shadow:0 1px 2px rgba(15,23,42,.18), inset 0 1px 0 rgba(255,255,255,.18);
   }
+  /* the branch you are working in, shown in the header */
+  .top-branch{
+    display:inline-flex;align-items:center;gap:6px;min-width:0;
+    max-width:34vw;padding:5px 10px;border-radius:999px;flex:none;
+    font-size:12px;font-weight:650;line-height:1;
+    color:var(--brand);border:1px solid color-mix(in srgb,var(--brand) 26%, transparent);
+    background:color-mix(in srgb,var(--brand) 9%, transparent);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .top-branch::before{content:"Branch";font-weight:500;opacity:.72}
+  .top-branch:empty{display:none}
+  @media (max-width:560px){ .top-branch::before{display:none} .top-branch{max-width:30vw} }
+
   .brandtxt{min-width:0;flex:1}
   .biz{font-size:14.5px;font-weight:650;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .brandtxt .sub{font-size:11.5px;color:var(--muted);margin-top:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
