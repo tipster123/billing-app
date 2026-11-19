@@ -2,7 +2,7 @@
    Online it always asks the network first, so a new version of the app is picked up
    on the next reload. Offline it serves the saved copy.
    Bump VERSION whenever the app files change. */
-const VERSION = 'bill-app-v115';
+const VERSION = 'bill-app-v117';
 const CORE = [
   './',
   './index.html',
@@ -15,7 +15,8 @@ const CORE = [
   './html2canvas.min.js',
   './manifest.json',
   './icon-192.png',
-  './icon-512.png'
+  './icon-512.png',
+  './apple-touch-icon.png'
 ];
 
 self.addEventListener('install', function (event) {

@@ -96,9 +96,22 @@
     return ui.inv;
   }
   function save() {
-    if (!S.save()) toast('Could not save — browser storage is full');
-    else cloudSchedule();
+    if (S.save()) cloudSchedule();
   }
+
+  /* Writing to the browser can fail (storage full, private mode, blocked site
+     data). Store raises this event every time so a failed save is never silent
+     — the change is still in memory, but it is not on the device yet. */
+  var saveErrorAt = 0;
+  window.addEventListener('store-save-error', function (e) {
+    var now = Date.now();
+    if (now - saveErrorAt < 15000) return;
+    saveErrorAt = now;
+    var why = (e && e.detail && e.detail.message) || '';
+    try {
+      toast('Could not save on this device' + (why ? ' (' + why + ')' : '') + ' — browser storage is full. Free some space, then try again.');
+    } catch (err) {}
+  });
 
   /* ------------------------------------------------------------- cloud sync */
   var CLOUD_SQL = [
@@ -1073,6 +1086,7 @@
     }
     restoreFocus(focusSnap);
     try { syncCreateButtons(); } catch (e) { console.error(e); }
+    syncViewportHeight();
   }
 
   function branchInvoices(b) { return db.invoices.filter(function (i) { return i.branchId === (b || ui.branch); }); }
@@ -3715,12 +3729,12 @@
         <div class="sub">${esc(branchName(ui.branch))} · ${all.length} ${all.length === 1 ? 'entry' : 'entries'} · ${money(loss)} total${waiting.length ? ' · ' + waiting.length + ' not settled' : ''}</div></div>
         <div class="row-actions">${can('damage') ? '<button class="btn primary" data-act="dmg-new">+ Record damage</button>' : ''}</div></div>
       ${fBar('damage')}
-      ${waiting.length ? `<div class="note" style="margin:12px 0">Tap <b>Settle</b> when the loss is sorted out. Stock is never changed from here.</div>` : ''}
+      ${waiting.length ? `<div class="note" style="margin:12px 0">Tap <b>Settle</b> when the loss is sorted out — the quantity is then taken out of stock at that branch.</div>` : ''}
       ${list.length ? `<div class="table-wrap"><table class="data"><thead><tr>
         <th>Date</th><th>What happened</th><th>Responsible</th><th class="num">Amount</th><th>Note</th><th>By</th><th>Status</th><th></th>
         </tr></thead><tbody>${list.map(function (d) {
           return `<tr><td>${esc(fmtDate(d.date))}</td>
-            <td><b>${esc(d.name || '—')}</b>${d.qty ? `<br><span class="sub">Qty ${num(d.qty)}</span>` : ''}</td>
+            <td><b>${esc(d.name || '—')}</b>${d.qty ? `<br><span class="sub">${d.adjust ? 'Change ' + (Number(d.stockMoved) > 0 ? '+' : '') + num(d.stockMoved) : 'Qty ' + num(d.qty)}</span>` : ''}</td>
             <td>${esc(d.responsible || '—')}</td>
             <td class="num">${money(d.costValue)}</td>
             <td>${esc(d.reason || '—')}</td><td>${esc(d.byName || '—')}</td>
@@ -3766,10 +3780,39 @@
       <div class="field"><label>Branch</label><select class="inp" name="branchId">
         ${S.visibleBranches().map(function (b) { return `<option value="${b.id}"${b.id === ui.branch ? ' selected' : ''}>${esc(b.name)}</option>`; }).join('')}</select></div>
       <div class="field"><label>Note</label><input class="inp" name="reason" placeholder="What happened" value="${esc(pre.reason || '')}"></div>
-      <div class="hint">Nothing is taken out of stock. Mark the entry <b>Settled</b> from the list once it is sorted out.</div>
+      <div class="hint">Nothing is taken out of stock yet. Tap <b>Settle</b> on the list, once it is sorted out, and the quantity comes out of stock at that branch.</div>
       <div class="row-actions" style="justify-content:flex-end;margin-top:16px">
         <button class="btn" type="button" data-act="close-modal">Cancel</button>
         <button class="btn primary" type="submit">Save</button>
+      </div></form>`);
+  }
+
+  /* Stock adjustment: type the quantity actually counted at a branch and the
+     item's stock moves by the difference. The change is kept as a settled
+     entry, so the item history, the damage list and the cloud copy all show
+     it, and deleting that entry puts the stock back the way it was. */
+  function adjustStockModal(itemId) {
+    var it = itemById(itemId);
+    if (!it) return toast('Item not found');
+    var branches = S.visibleBranches();
+    if (!branches.length) return toast('No branch to adjust');
+    var bid = ui.branch;
+    if (!branches.some(function (b) { return b.id === bid; })) bid = branches[0].id;
+    var have = r2(S.stockOf(it, bid));
+    openModal('Adjust stock · ' + (it.name || 'Item'), `<form data-form="stock-adjust">
+      <input type="hidden" name="id" value="${it.id}">
+      <div class="grid2">
+        <div class="field"><label>Branch</label><select class="inp" name="branchId">
+          ${branches.map(function (b) { return `<option value="${b.id}"${b.id === bid ? ' selected' : ''}>${esc(b.name)} · ${num(S.stockOf(it, b.id))} in stock</option>`; }).join('')}</select></div>
+        <div class="field"><label>Quantity actually in stock</label>
+          <input class="inp" type="number" step="1" name="counted" value="${have}" required autocomplete="off"></div>
+      </div>
+      <div class="hint">${esc(branchName(bid))} shows <b>${num(have)}</b> in stock. Saving sets it to the number you type and keeps a record of the change.</div>
+      <div class="field"><label>Reason (optional)</label>
+        <input class="inp" name="reason" placeholder="Stock count, damage, found stock…" autocomplete="off"></div>
+      <div class="row-actions" style="justify-content:flex-end;margin-top:16px">
+        <button class="btn" type="button" data-act="close-modal">Cancel</button>
+        <button class="btn primary" type="submit">Save adjustment</button>
       </div></form>`);
   }
 
@@ -4412,10 +4455,12 @@
     });
     (db.damages || []).forEach(function (d) {
       if (d.itemId !== it.id) return;
-      ev.push({ date: d.date, created: d.created || 0, type: d.adjusted ? 'Damage (adjusted)' : 'Damage (pending)',
+      var moved = (d.stockMoved != null) ? (Number(d.stockMoved) || 0) : (d.adjusted ? -Number(d.qty || 0) : 0);
+      ev.push({ date: d.date, created: d.created || 0,
+        type: d.adjust ? 'Stock adjustment' : (d.adjusted ? 'Damage (adjusted)' : 'Damage (pending)'),
         ref: d.reason || 'Damage', branches: [d.branchId],
-        detail: branchName(d.branchId) + (d.adjusted ? ' · stock reduced' : ' · not adjusted yet'),
-        qty: d.adjusted ? -Number(d.qty || 0) : 0, amt: money(Number(d.costValue || 0)),
+        detail: branchName(d.branchId) + (moved ? (moved < 0 ? ' · stock reduced' : ' · stock added') : (d.adjusted ? '' : ' · not adjusted yet')),
+        qty: moved, amt: money(Number(d.costValue || 0)),
         note: d.adjusted ? '' : (num(d.qty) + ' recorded') });
     });
     (db.transfers || []).forEach(function (t) {
@@ -4456,7 +4501,7 @@
       if (f === 'all') return true;
       if (f === 'sale') return e.type === 'Sale' || e.type === 'Sale return';
       if (f === 'purchase') return e.type === 'Purchase' || e.type === 'Purchase return';
-      if (f === 'damage') return e.type.indexOf('Damage') === 0;
+      if (f === 'damage') return e.type.indexOf('Damage') === 0 || e.type === 'Stock adjustment';
       if (f === 'transfer') return e.type.indexOf('Transfer') === 0;
       return true;
     });
@@ -5805,7 +5850,9 @@
       var d = db.damages.filter(function (x) { return x.id === id; })[0];
       if (!d) return null;
       return { name: d.name || 'Damage entry', sub: fmtDate(d.date) + ' · ' + num(d.qty) + ' pcs',
-        effects: d.adjusted ? ['These ' + num(d.qty) + ' go back into stock at ' + branchName(d.branchId) + '.']
+        effects: d.adjusted
+          ? (d.stockMoved ? [num(Math.abs(Number(d.stockMoved) || 0)) + ' go back into stock at ' + branchName(d.branchId) + '.']
+            : ['It was settled, so stock is not touched.'])
           : ['It was never settled, so stock is not touched.'] };
     }
     if (kind === 'transfer') {
@@ -6750,7 +6797,9 @@
       if (!dmg) return null;
       if (dmg.adjusted) {
         var dit = itemById(dmg.itemId);
-        if (dit) S.addStock(dit, dmg.branchId, Number(dmg.qty) || 0);
+        /* only give stock back when this entry actually took stock out */
+        var dback = (dmg.stockMoved != null) ? -(Number(dmg.stockMoved) || 0) : 0;
+        if (dit && dback) S.addStock(dit, dmg.branchId, dback);
       }
       db.damages = db.damages.filter(function (x) { return x.id !== id; });
       logActivity('Deleted damage entry ' + (dmg.name || ''), 'delete');
@@ -7525,8 +7574,17 @@
       if (!dj || dj.adjusted) return;
       dj.adjusted = true; dj.adjustedAt = Date.now();
       dj.adjustedByName = (S.currentStaff() || {}).name || '';
-      logActivity('Settled damage ' + (dj.name || '') + ' (' + money(Number(dj.costValue) || 0) + ')', 'damage');
-      save(); render(); return toast('Marked settled');
+      /* settling a recorded loss now actually takes the units out of stock */
+      var moved = 0, djQty = Number(dj.qty) || 0;
+      var djItem = dj.itemId ? itemById(dj.itemId) : null;
+      if (djItem && djQty > 0) {
+        moved = -Math.min(djQty, S.stockOf(djItem, dj.branchId));
+        S.addStock(djItem, dj.branchId, moved);
+        dj.stockMoved = moved;
+      }
+      logActivity('Settled damage ' + (dj.name || '') + ' (' + money(Number(dj.costValue) || 0) + ')' + (moved ? ' — took ' + num(-moved) + ' out of stock' : ''), 'damage');
+      save(); render();
+      return toast(moved ? 'Settled — ' + num(-moved) + ' taken out of stock' : 'Marked settled');
     }
     if (action === 'dmg-del') {
       if (!can('damage')) return toast('No permission');
@@ -7606,11 +7664,8 @@
     if (action === 'item-hist') { ui.itemHist = el.getAttribute('data-val') || 'all'; return render(); }
     if (action === 'item-adjust') {
       ui.itemMore = '';
-      if (!can('damage')) return toast('No permission');
-      var pit = itemById(id);
-      damageModal(pit ? { name: pit.name, amount: r2(Number(pit.cost) || 0) } : null);
-      var qtyEl = document.querySelector('input[name="qty"]'); if (qtyEl) qtyEl.focus();
-      return;
+      if (!can('stock.edit') && !can('damage')) return toast('No permission');
+      return adjustStockModal(id);
     }
     if (action === 'item-new') { ui.resumePurchaseAfterItem = (el && el.getAttribute('data-ctx') === 'purchase') || !!(typeof pDraft !== 'undefined' && pDraft && typeof purchaseModal === 'function' && document.querySelector('.p-form')); return itemModal(null); }
     if (action === 'item-cat-pick' || action === 'item-cat-add') {
@@ -8540,6 +8595,36 @@
       return toast('Payment of ' + money(payAmt) + ' recorded');
     }
 
+    if (kind === 'stock-adjust') {
+      if (!can('stock.edit') && !can('damage')) return toast('No permission');
+      var ait = itemById(data.id);
+      if (!ait) return toast('Item not found');
+      var abranch = data.branchId || ui.branch;
+      if (!S.branchById(abranch)) return toast('Choose a branch');
+      var rawCounted = String(data.counted == null ? '' : data.counted).trim();
+      if (rawCounted === '') return toast('Type the quantity actually in stock');
+      var counted = r2(Number(rawCounted));
+      if (!isFinite(counted) || counted < 0) return toast('Quantity must be zero or more');
+      var before = r2(S.stockOf(ait, abranch));
+      var delta = r2(counted - before);
+      if (!delta) return toast('Stock is already ' + num(before) + ' at ' + branchName(abranch));
+      S.addStock(ait, abranch, delta);
+      var ame = S.currentStaff();
+      var areason = String(data.reason || '').trim() || 'Stock adjustment';
+      db.damages.push({
+        id: uid(), date: today(), created: Date.now(), branchId: abranch,
+        itemId: ait.id, name: ait.name, qty: Math.abs(delta),
+        costValue: r2((delta < 0 ? -delta : 0) * (Number(ait.cost) || 0)),
+        responsible: '', reason: areason,
+        byName: ame ? ame.name : '', staffId: ame ? ame.id : '',
+        adjusted: true, adjustedAt: Date.now(), adjustedByName: ame ? ame.name : '',
+        adjust: true, stockMoved: delta
+      });
+      logActivity('Adjusted ' + ait.name + ' at ' + branchName(abranch) + ': ' + num(before) + ' → ' + num(counted) + ' (' + (delta > 0 ? '+' : '') + num(delta) + ')', 'stock');
+      save(); closeModal(); render();
+      return toast('Stock adjusted: ' + num(before) + ' → ' + num(counted));
+    }
+
     if (kind === 'damage') {
       var dname = String(data.itemName || '').trim();
       if (!dname) return toast('Type what was damaged or lost');
@@ -9265,12 +9350,3 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
 })();
-
-
-  try {
-    if (typeof render === 'function' && !render.__vvWrapped) {
-      var _renderVV = render;
-      render = function () { var r = _renderVV.apply(this, arguments); try { if (typeof syncViewportHeight === 'function') syncViewportHeight(); } catch(e){} return r; };
-      render.__vvWrapped = true;
-    }
-  } catch (e) {}

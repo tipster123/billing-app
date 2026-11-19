@@ -432,9 +432,29 @@ window.Store = (function () {
     return db;
   }
 
+  var saveFailure = null;
+
   function save() {
-    try { localStorage.setItem(KEY, JSON.stringify(db)); return true; }
-    catch (e) { return false; }
+    try {
+      localStorage.setItem(KEY, JSON.stringify(db));
+      saveFailure = null;
+      return true;
+    } catch (e) {
+      saveFailure = e || new Error('Browser storage refused the save');
+      /* the change is still in memory but is not written to this device —
+         announce it so the app can warn instead of losing it silently */
+      try {
+        window.dispatchEvent(new CustomEvent('store-save-error', {
+          detail: { message: String((saveFailure && saveFailure.message) || saveFailure) }
+        }));
+      } catch (e2) {}
+      return false;
+    }
+  }
+
+  /* message from the last failed save, or '' when the last save worked */
+  function saveError() {
+    return saveFailure ? String((saveFailure && saveFailure.message) || saveFailure) : '';
   }
 
   /* true when this browser had nothing stored at all when the app started —
@@ -574,7 +594,7 @@ window.Store = (function () {
   return {
     KEY: KEY, ALL_PERMS: ALL_PERMS, PERM_LABELS: PERM_LABELS, PERM_GROUPS: PERM_GROUPS,
     ROLE_LABEL: ROLE_LABEL, ROLE_PERMS: ROLE_PERMS,
-    load: load, save: save, reset: reset, importData: importData, wasEmpty: wasEmpty,
+    load: load, save: save, saveError: saveError, reset: reset, importData: importData, wasEmpty: wasEmpty,
     get: function () { return db; },
     login: login, logout: logout, currentStaff: currentStaff, isOwner: isOwner, can: can,
     branchById: branchById, branchName: branchName, myBranchId: myBranchId,
