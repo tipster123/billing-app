@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v133';
+  var APP_VERSION = 'v134';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
