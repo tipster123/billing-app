@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v124';
+  var APP_VERSION = 'v125';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -5471,20 +5471,8 @@
             <div class="amt"><button class="btn sm" data-act="branch-edit" data-id="${b.id}">Edit</button>
             <button class="btn sm danger" data-act="branch-del" data-id="${b.id}">Delete</button></div></div>`;
         }).join('')}</div>
-        ${S.isOwner() ? `<form data-form="branch-targets" style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
-          <div class="sub" style="margin-bottom:10px">Monthly targets for each branch, measured against this month's sales. Staff see the sales target; the profit target is yours only. Profit is what is left after cost, expenses and damage. Leave a box empty for no target.</div>
-          ${db.branches.map(function (b) {
-            var tg = branchTarget(b.id);
-            return `<div class="grid2" style="align-items:end;margin-bottom:8px">
-              <div class="field"><label>${esc(b.name)} · Sales target</label>
-                <input class="inp" type="number" min="0" step="1" name="sales_${b.id}" value="${tg.sales || ''}" placeholder="0" autocomplete="off"></div>
-              <div class="field"><label>Profit target</label>
-                <input class="inp" type="number" min="0" step="1" name="profit_${b.id}" value="${tg.profit || ''}" placeholder="0" autocomplete="off"></div>
-            </div>`;
-          }).join('')}
-          <div class="row-actions" style="justify-content:flex-end"><button class="btn primary" type="submit">Save targets</button></div>
-        </form>` : ''}
         <div class="row-actions" style="margin-top:12px"><button class="btn" data-act="branch-add">+ Add branch</button></div>
+        <div class="sub" style="margin-top:10px">Open Edit on a branch to set its monthly sales and profit targets.</div>
       </div>
 
       <div class="card"><h3>Backup &amp; restore</h3>
@@ -5968,6 +5956,7 @@
   function branchModal(id) {
     var b = id ? S.branchById(id) : null;
     var pref = b && b.prefix ? b.prefix : (db.settings.prefix || 'INV');
+    var tg = (b && branchTarget(b.id)) || { sales: 0, profit: 0 };
     openModal(b ? 'Edit branch' : 'Add branch', `<form data-form="branch">
       <input type="hidden" name="id" value="${b ? b.id : ''}">
       <div class="field"><label>Branch name</label><input class="inp" name="name" required value="${esc(b ? b.name : '')}"></div>
@@ -5976,7 +5965,13 @@
         <div class="field"><label>Phone</label><input class="inp" name="phone" value="${esc(b ? b.phone : '')}"></div>
         <div class="field"><label>Invoice prefix</label><input class="inp" name="prefix" value="${esc(pref)}" placeholder="INV"></div>
       </div>
-      <div class="hint" style="margin-bottom:8px">Bills in this branch will use this prefix (e.g. ${esc(String(pref||'INV').toUpperCase())}-${nextBillSeq()}).</div>
+      <div class="hint" style="margin-bottom:12px">Bills in this branch will use this prefix (e.g. ${esc(String(pref||'INV').toUpperCase())}-${nextBillSeq()}).</div>
+      <div class="section-title" style="margin-top:0">Monthly targets</div>
+      <div class="hint" style="margin-bottom:8px">Measured against this month's sales. Staff see the sales target; the profit target is yours only. Profit is what is left after cost, expenses and damage. Leave a box empty for no target.</div>
+      <div class="grid2">
+        <div class="field"><label>Sales target</label><input class="inp" type="number" min="0" step="1" name="targetSales" value="${tg.sales || ''}" placeholder="0" autocomplete="off"></div>
+        <div class="field"><label>Profit target</label><input class="inp" type="number" min="0" step="1" name="targetProfit" value="${tg.profit || ''}" placeholder="0" autocomplete="off"></div>
+      </div>
       <div class="row-actions" style="justify-content:flex-end;margin-top:16px">
         <button class="btn" type="button" data-act="close-modal">Cancel</button>
         <button class="btn primary" type="submit">Save branch</button>
@@ -8117,6 +8112,8 @@
       });
       db.branches = db.branches.filter(function (b) { return b.id !== id; });
       db.items.forEach(function (it) { if (it.stock) delete it.stock[id]; });
+      /* its monthly targets go with the branch */
+      delete branchTargets()[id];
       if (ui.branch === id) { ui.branch = keep.id; rememberBranch(keep.id); }
       logActivity('Deleted branch ' + brGone.name, 'delete');
       closeModal(); save(); render();
@@ -8627,6 +8624,13 @@
         db.branches.push(nb);
         db.items.forEach(function (it) { it.stock[nb.id] = 0; });
       }
+      /* monthly targets live with the branch they belong to */
+      var tgtId = data.id ? data.id : nb.id;
+      var ts = Math.max(0, r2(Number(data.targetSales) || 0));
+      var tp = Math.max(0, r2(Number(data.targetProfit) || 0));
+      var bt = branchTargets();
+      if (ts || tp) bt[tgtId] = { sales: ts, profit: tp }; else delete bt[tgtId];
+      logActivity('Updated branch targets', 'settings');
       save(); closeModal(); render(); return toast('Branch saved');
     }
 
@@ -8993,19 +8997,6 @@
       s.currency = String(data.currency || '\u20B9').trim().slice(0, 3) || '\u20B9';
       logActivity('Updated business details', 'settings');
       save(); render(); return toast('Business details saved');
-    }
-
-    if (kind === 'branch-targets') {
-      if (!S.isOwner()) return toast('Only the owner can set targets');
-      var bt = branchTargets();
-      db.branches.forEach(function (b) {
-        var ts = Math.max(0, r2(Number(data['sales_' + b.id]) || 0));
-        var tp = Math.max(0, r2(Number(data['profit_' + b.id]) || 0));
-        if (ts || tp) bt[b.id] = { sales: ts, profit: tp };
-        else delete bt[b.id];
-      });
-      logActivity('Updated branch targets', 'settings');
-      save(); render(); return toast('Branch targets saved');
     }
 
     if (kind === 'invpayment') {
