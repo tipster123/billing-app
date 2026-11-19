@@ -18,16 +18,17 @@ window.Store = (function () {
     'dashboard', 'bill', 'invoices', 'returns', 'purchases', 'damage', 'complaints', 'transfer', 'items', 'customers',
     'ledgers', 'expenses', 'reports', 'staff', 'settings',
     'price.edit', 'discount', 'invoice.delete', 'stock.edit', 'expense.edit', 'purchase.edit', 'profit.view',
-    'damage.settle'
+    'damage.settle', 'damage.entry', 'damage.delete',
+    'purchase.entry', 'purchase.pay'
   ];
 
   var PERM_LABELS = {
-    dashboard: 'Dashboard',
+    dashboard: 'View dashboard',
     bill: 'Create bills',
-    invoices: 'Invoices & printing',
+    invoices: 'View invoices & print',
     returns: 'Sales returns',
-    purchases: 'Purchases & suppliers',
-    damage: 'Damage / loss',
+    purchases: 'View purchases & suppliers',
+    damage: 'View damage / loss',
     complaints: 'Complaints',
     transfer: 'Stock transfers',
     items: 'Items & stock',
@@ -44,20 +45,37 @@ window.Store = (function () {
     'expense.edit': 'Add / edit expenses',
     'purchase.edit': 'Edit purchases',
     'profit.view': 'See cost, profit & purchase prices',
-    'damage.settle': 'Settle damage / loss'
+    'damage.settle': 'Settle damage / loss',
+    'damage.entry': 'Record damage / loss entry',
+    'damage.delete': 'Delete damage / loss entry',
+    'purchase.entry': 'Purchase entry',
+    'purchase.pay': 'Enter purchase amount / payment'
   };
 
   var PERM_GROUPS = [
-    { title: 'Screens', keys: ['dashboard', 'bill', 'invoices', 'returns', 'purchases', 'damage', 'complaints', 'transfer', 'items', 'customers', 'ledgers', 'expenses', 'reports', 'staff', 'settings'] },
-    { title: 'Sensitive actions', keys: ['price.edit', 'discount', 'invoice.delete', 'stock.edit', 'expense.edit', 'purchase.edit', 'profit.view', 'damage.settle'] }
+    { title: 'Dashboard', keys: ['dashboard'] },
+    { title: 'Billing & invoices', keys: ['bill', 'invoices', 'price.edit', 'discount', 'invoice.delete'] },
+    { title: 'Sales returns', keys: ['returns'] },
+    { title: 'Purchases & suppliers', keys: ['purchases', 'purchase.entry', 'purchase.edit', 'purchase.pay'] },
+    { title: 'Damage / loss', keys: ['damage', 'damage.entry', 'damage.settle', 'damage.delete'] },
+    { title: 'Complaints', keys: ['complaints'] },
+    { title: 'Stock transfers', keys: ['transfer'] },
+    { title: 'Items & stock', keys: ['items', 'stock.edit'] },
+    { title: 'Customers', keys: ['customers'] },
+    { title: 'Ledgers', keys: ['ledgers'] },
+    { title: 'Expenses', keys: ['expenses', 'expense.edit'] },
+    { title: 'Reports & profit', keys: ['reports', 'profit.view'] },
+    { title: 'Staff & settings', keys: ['staff', 'settings'] }
   ];
 
   var ROLE_LABEL = { owner: 'Owner / Admin', manager: 'Manager', cashier: 'Cashier' };
   var ROLE_PERMS = {
     owner: ALL_PERMS.slice(),
-    manager: ['dashboard', 'bill', 'invoices', 'returns', 'damage', 'complaints', 'transfer', 'items', 'customers', 'ledgers', 'expenses', 'reports',
-      'price.edit', 'discount', 'invoice.delete', 'stock.edit', 'expense.edit'],
-    cashier: ['dashboard', 'bill', 'invoices', 'returns', 'damage', 'complaints', 'transfer', 'items', 'customers']
+    manager: ['dashboard', 'bill', 'invoices', 'returns', 'purchases', 'damage', 'complaints', 'transfer', 'items', 'customers', 'ledgers', 'expenses', 'reports',
+      'price.edit', 'discount', 'invoice.delete', 'stock.edit', 'expense.edit',
+      'damage.entry', 'damage.delete', 'purchase.entry'],
+    cashier: ['dashboard', 'bill', 'invoices', 'returns', 'purchases', 'damage', 'complaints', 'transfer', 'items', 'customers',
+      'damage.entry', 'purchase.entry']
   };
 
   /* ------------------------------------------------------------- utilities */
@@ -431,6 +449,7 @@ window.Store = (function () {
     if (sessionStaffId && !db.staff.some(function (s) { return s.id === sessionStaffId && s.active; })) {
       sessionStaffId = '';
     }
+    migrateStaffPerms();
     return db;
   }
 
@@ -477,6 +496,33 @@ window.Store = (function () {
   }
 
   /* ------------------------------------------------------------------- auth */
+  /* bring older saved permission lists up to date with newer, split-out perms */
+  function migratePerms(perms) {
+    var p = (perms || []).slice();
+    function add(k) { if (p.indexOf(k) === -1) p.push(k); }
+    /* damage used to cover entry + delete; settle stayed separate */
+    if (p.indexOf('damage') > -1) { add('damage.entry'); add('damage.delete'); }
+    /* purchases screen implied creating entries; payment was tied to purchase.edit */
+    if (p.indexOf('purchases') > -1) { add('purchase.entry'); }
+    if (p.indexOf('purchase.edit') > -1) { add('purchase.pay'); }
+    return p;
+  }
+  function migrateStaffPerms() {
+    if (!db || !db.staff) return;
+    db.staff.forEach(function (st) {
+      if (!st) return;
+      /* an owner always has everything, so keep the saved list in step */
+      if (st.role === 'owner') { st.perms = ALL_PERMS.slice(); st.permsSplit = true; return; }
+      if (st.perms && !st.permsSplit) { st.perms = migratePerms(st.perms); st.permsSplit = true; }
+      /* multi-branch access: normalise branchIds from legacy single branchId */
+      if (!Array.isArray(st.branchIds)) {
+        st.branchIds = st.branchId ? [st.branchId] : [];
+      }
+      if (!st.branchIds.length && st.branchId) st.branchIds = [st.branchId];
+      if (st.branchIds.length && !st.branchId) st.branchId = st.branchIds[0];
+    });
+  }
+
   function login(username, password) {
     var u = String(username || '').trim().toLowerCase();
     var p = String(password || '');
@@ -521,16 +567,40 @@ window.Store = (function () {
     return gone ? { id: gone.id, name: gone.name, removed: true } : null;
   }
   function branchName(id) { var b = branchById(id); return b ? b.name : '—'; }
+  function staffBranchIds(s) {
+    s = s || currentStaff();
+    if (!s) return [];
+    var ids = Array.isArray(s.branchIds) ? s.branchIds.slice() : [];
+    if (!ids.length && s.branchId) ids = [s.branchId];
+    /* keep only live branches, but never drop everything */
+    var live = ids.filter(function (id) { var b = branchById(id); return b && !b.removed; });
+    return live.length ? live : ids;
+  }
   function myBranchId() {
     var s = currentStaff();
-    if (s && s.role !== 'owner' && branchById(s.branchId)) return s.branchId;
-    var own = (currentStaff() && currentStaff().branchId) || '';
+    if (s && s.role !== 'owner') {
+      var ids = staffBranchIds(s);
+      if (ids.length) {
+        var cur = s.branchId;
+        if (cur && ids.indexOf(cur) > -1) return cur;
+        return ids[0];
+      }
+      return (db.branches[0] && db.branches[0].id) || '';
+    }
+    var own = (s && s.branchId) || '';
     if (branchById(own) && !branchById(own).removed) return own;
     return (db.branches[0] && db.branches[0].id) || '';
   }
   function canSeeAllBranches() { return isOwner(); }
+  function canSwitchBranches() {
+    if (isOwner()) return db.branches.length > 1;
+    return staffBranchIds().length > 1;
+  }
   function visibleBranches() {
-    return canSeeAllBranches() ? db.branches : db.branches.filter(function (b) { return b.id === myBranchId(); });
+    if (canSeeAllBranches()) return db.branches;
+    var ids = staffBranchIds();
+    var list = db.branches.filter(function (b) { return ids.indexOf(b.id) > -1; });
+    return list.length ? list : db.branches.filter(function (b) { return b.id === myBranchId(); });
   }
 
   /* ------------------------------------------------------------------- stock */
@@ -599,8 +669,9 @@ window.Store = (function () {
     load: load, save: save, saveError: saveError, reset: reset, importData: importData, wasEmpty: wasEmpty,
     get: function () { return db; },
     login: login, logout: logout, currentStaff: currentStaff, isOwner: isOwner, can: can,
-    branchById: branchById, branchName: branchName, myBranchId: myBranchId,
-    canSeeAllBranches: canSeeAllBranches, visibleBranches: visibleBranches,
+    branchById: branchById, branchName: branchName, myBranchId: myBranchId, staffBranchIds: staffBranchIds,
+    canSeeAllBranches: canSeeAllBranches, canSwitchBranches: canSwitchBranches, visibleBranches: visibleBranches,
+    migratePerms: migratePerms, migrateStaffPerms: migrateStaffPerms,
     stockOf: stockOf, totalStock: totalStock, addStock: addStock,
     pendingTransfersFor: pendingTransfersFor,
     acceptTransfer: acceptTransfer, rejectTransfer: rejectTransfer,

@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v126';
+  var APP_VERSION = 'v127';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -830,10 +830,10 @@
         ? { label: 'Add supplier', act: 'supplier-new' }
         : { label: 'New customer', act: 'cust-new' },
       complaints: { label: 'New complaint', act: 'cmp-new' },
-      damage: { label: 'New damage entry', act: 'dmg-new' },
+      damage: can('damage.entry') ? { label: 'New damage entry', act: 'dmg-new' } : null,
       expenses: { label: 'New expense', act: 'exp-new' },
       items: { label: 'New item', act: 'item-new' },
-      purchases: { label: 'New purchase', act: 'purchase-new' },
+      purchases: canSubmitPurchase() ? { label: 'New purchase', act: 'purchase-new' } : null,
       transfers: { label: 'New transfer', act: 'tr-new' },
       staff: { label: 'Add staff', act: 'staff-new' }
     };
@@ -861,6 +861,7 @@
 
   function tabAllowed(id) {
     if (id === 'purchases') return !!(can('purchases') || canSubmitPurchase());
+    if (id === 'damage') return !!(can('damage') || can('damage.entry') || can('damage.settle') || can('damage.delete'));
     var d = tabDef(id);
     return !!(can(d.perm) && (!d.extra || can(d.extra)));
   }
@@ -1046,7 +1047,7 @@
     $('#branchSel').innerHTML = branches.map(function (b) {
       return '<option value="' + b.id + '"' + (b.id === ui.branch ? ' selected' : '') + '>' + esc(b.name) + '</option>';
     }).join('');
-    $('#branchSel').disabled = !S.canSeeAllBranches() || branches.length < 2;
+    $('#branchSel').disabled = !S.canSwitchBranches() || branches.length < 2;
 
     var pend = S.pendingTransfersFor(ui.branch).length;
     var dmgPend = pendingDamages(ui.branch).length;
@@ -1203,8 +1204,11 @@
     return !!(st && st.role !== 'owner');
   }
   function canSubmitPurchase() {
-    var st = S.currentStaff();
-    return !!(can('purchases') || (st && (st.role === 'manager' || st.role === 'cashier')));
+    return !!(can('purchase.entry') || can('purchase.edit'));
+  }
+  /* recording a payment (and the amount on a purchase) is its own permission */
+  function canPayPurchase() {
+    return !!(can('purchase.pay') || can('purchase.edit'));
   }
   function canSeePurchaseMoney() {
     return S.isOwner();
@@ -1970,6 +1974,55 @@
       db.invoices = db.invoices.map(function (x) { return x.id === snapshot.id ? snapshot : x; });
     } } });
     openBillPreview(inv);
+  }
+
+  /* Saving a bill is confirmed first: the popup shows what is about to be
+     saved and lets you save, cancel, or step back into the bill and edit it. */
+  function billSaveModal(mode) {
+    if (!can('bill')) return toast('No permission to bill');
+    var b = ui.bill;
+    if (!b) return;
+    if (!b.editId && !b.lines.length) return toast('Add at least one item');
+    var t = billTotals();
+    var paid = r2((b.payments || []).reduce(function (s, p) { return s + (Number(p.amount) || 0); }, 0));
+    var due = r2(Math.max(0, t.total - paid));
+    var cust = b.customerId ? findCust(b.customerId) : null;
+    var itemCount = (b.lines || []).reduce(function (s, l) { return s + (Number(l.qty) || 0); }, 0);
+    var editMode = !!b.editId;
+    openModal(editMode ? 'Save changes to ' + (b.editNo || 'this bill') + '?' : 'Save this bill?', `
+      <div class="card" style="margin:0 0 12px">
+        <div class="title" style="font-weight:600">${cust ? esc(cust.name) : 'Walk-in customer'}</div>
+        <div class="sub">${num(itemCount)} ${itemCount === 1 ? 'item' : 'items'} · ${esc(branchName(editMode ? b.editBranch : ui.branch))} · ${esc(fmtDate(b.editDate || b.date || today()))}</div>
+      </div>
+      <div class="p-view-tot">
+        <div><span>Subtotal</span><b>${money(t.subtotal)}</b></div>
+        ${Number(t.tax) ? `<div><span>Tax</span><b>${money(t.tax)}</b></div>` : ''}
+        <div class="big"><span>Total</span><b>${money(t.total)}</b></div>
+        <div><span>Received</span><b>${money(paid)}</b></div>
+        <div class="${due > 0.009 ? 'due' : ''}"><span>Balance due</span><b>${money(due)}</b></div>
+      </div>
+      <div class="hint" style="margin-top:10px">${editMode
+        ? 'Save Bill updates this bill and puts the stock difference back in ' + esc(branchName(b.editBranch)) + '.'
+        : 'Save Bill takes the items out of stock in ' + esc(branchName(ui.branch)) + ' and opens the bill to print.'}</div>
+      <div class="row-actions" style="justify-content:flex-end;margin-top:16px">
+        <button class="btn" type="button" data-act="bill-save-cancel">Cancel</button>
+        <button class="btn" type="button" data-act="bill-save-edit">Edit</button>
+        <button class="btn primary" type="button" data-act="bill-save-yes" data-mode="${mode || 'save'}">Save Bill</button>
+      </div>`);
+  }
+
+  /* Cancel closes the popup and keeps the bill as it is; Edit goes back to the
+     bill so it can be changed before saving again. */
+  function billSaveCancel() {
+    closeModal();
+    toast('Bill not saved — still editing');
+  }
+  function billSaveEdit() {
+    closeModal();
+    render();
+    var first = document.querySelector('.bill-fast [data-input="bill-date"]');
+    if (first && first.focus) { try { first.focus({ preventScroll: true }); } catch (e) { try { first.focus(); } catch (e2) {} } }
+    toast('Change anything you need, then tap Save Bill again');
   }
 
   function saveBill(mode) {
@@ -3118,7 +3171,7 @@
     }, 0);
     var rets = db.preturns.filter(function (r) { return r.branchId === ui.branch; });
     var retTotal = rets.reduce(function (s, r) { return s + Number(r.total || 0); }, 0);
-    var canNew = canSubmitPurchase ? canSubmitPurchase() : (can('purchases'));
+          var canNew = canSubmitPurchase();
     var newLabel = restricted ? '+ Send purchase for approval' : '+ New purchase';
 
     return `
@@ -3676,7 +3729,7 @@
     if (!p) return;
     var sup = supplierById(p.supplierId);
     var isPending = purchaseStatus(p) === 'pending';
-    var showMoney = S.isOwner() || can('purchase.edit');
+    var showMoney = S.isOwner() || can('purchase.edit') || can('purchase.pay');
     var paidAmt = typeof p.paid === 'number' ? p.paid : (p.paid ? Number(p.total || 0) : 0);
     var dueAmt = r2(Number(p.total || 0) - paidAmt);
     var subAmt = p.subtotal != null ? p.subtotal : r2(Number(p.total || 0) - (Number(p.shipping) || 0) + (Number(p.discount) || 0));
@@ -3716,7 +3769,7 @@
       ${p.note ? `<div class="p-view-note"><b>Note</b><br>${esc(p.note)}</div>` : ''}
       <div class="row-actions" style="justify-content:flex-end;margin-top:14px">
         ${S.isOwner() && isPending ? `<button class="btn primary" type="button" data-act="purchase-approve-open" data-id="${p.id}">Review & approve</button>` : ''}
-        ${(!isPending && dueAmt > 0.009 && (S.isOwner() || can('purchase.edit'))) ? `<button class="btn primary" type="button" data-act="purchase-pay" data-id="${p.id}">Pay</button>` : ''}
+        ${(!isPending && dueAmt > 0.009 && (S.isOwner() || canPayPurchase())) ? `<button class="btn primary" type="button" data-act="purchase-pay" data-id="${p.id}">Pay</button>` : ''}
         ${(!isPending && (S.isOwner() || can('purchase.edit'))) ? `<button class="btn${dueAmt > 0.009 ? '' : ' primary'}" type="button" data-act="purchase-edit" data-id="${p.id}">Edit purchase</button>` : ''}
         ${canDeleteEntry('purchase') ? `<button class="btn danger" type="button" data-act="del-ask" data-kind="purchase" data-id="${p.id}">Delete purchase</button>` : ''}
         <button class="btn" type="button" data-act="close-modal">Close</button></div>`);
@@ -3835,7 +3888,7 @@
   function purchasePayModal(id) {
     var p = db.purchases.filter(function (x) { return x.id === id; })[0];
     if (!p) return toast('Purchase not found');
-    if (!(S.isOwner() || can('purchase.edit'))) return toast('You cannot record purchase payments');
+    if (!(S.isOwner() || canPayPurchase())) return toast('You cannot record purchase payments');
     if (purchaseStatus(p) !== 'approved') return toast('Only approved purchases can be paid');
     var dueAmt = payDueOf(p);
     if (dueAmt <= 0.009) return toast('This purchase is already fully paid');
@@ -3856,7 +3909,7 @@
     return `
       <div class="page-head"><div><h2>Damage / loss</h2>
         <div class="sub">${esc(branchName(ui.branch))} · ${all.length} ${all.length === 1 ? 'entry' : 'entries'} · ${money(loss)} total${waiting.length ? ' · ' + waiting.length + ' not settled' : ''}</div></div>
-        <div class="row-actions">${can('damage') ? '<button class="btn primary" data-act="dmg-new">+ Record damage</button>' : ''}</div></div>
+        <div class="row-actions">${can('damage.entry') ? '<button class="btn primary" data-act="dmg-new">+ Record damage</button>' : ''}</div></div>
       ${fBar('damage')}
       ${waiting.length ? (canSettle
         ? `<div class="note" style="margin:12px 0">Tap <b>Settle</b> when the loss is sorted out — the quantity is then taken out of stock at that branch.</div>`
@@ -3871,7 +3924,7 @@
             <td>${esc(d.reason || '—')}</td><td>${esc(d.byName || '—')}</td>
             <td>${d.adjusted ? '<span class="badge ok">Settled</span>' : '<span class="badge warn">Pending</span>'}</td>
             <td style="text-align:right;white-space:nowrap">${(!d.adjusted && canSettle)
-              ? `<button class="btn sm primary" data-act="dmg-adjust" data-id="${d.id}">Settle</button> ` : ''}${can('damage')
+              ? `<button class="btn sm primary" data-act="dmg-adjust" data-id="${d.id}">Settle</button> ` : ''}${canDeleteEntry('damage')
               ? `<button class="btn sm danger ghost" data-act="del-ask" data-kind="damage" data-id="${d.id}">Delete</button>` : ''}</td></tr>`;
         }).join('')}</tbody></table></div>`
         : `<div class="empty"><b>${fOn('damage') ? 'No entries match' : 'No damage recorded'}</b>${fOn('damage') ? 'Try clearing a filter.' : 'Record a product damage or a service loss here — with who is responsible and the amount.'}</div>`}`;
@@ -5266,6 +5319,13 @@
 
 
   /* -------------------------------------------------------------------- staff */
+  function staffBranchesLabel(s) {
+    if (!s) return '—';
+    if (s.role === 'owner') return 'All branches';
+    var ids = S.staffBranchIds(s);
+    return ids.length ? ids.map(function (id) { return branchName(id); }).join(', ') : '—';
+  }
+
   function viewStaff() {
     var open = ui.staffOpen ? staffById(ui.staffOpen) : null;
     if (open) return viewStaffDetail(open);
@@ -5290,7 +5350,7 @@
           var sold = staffSales(s.id);
           var pct = tg > 0 ? Math.min(100, Math.round(sold / tg * 100)) : 0;
           var active = s.active !== false;
-          var sub = esc(S.ROLE_LABEL[s.role] || s.role) + ' · ' + esc(branchName(s.branchId)) + ' · ' + bills + ' bills';
+          var sub = esc(S.ROLE_LABEL[s.role] || s.role) + ' · ' + esc(staffBranchesLabel(s)) + ' · ' + bills + ' bills';
           if (tg > 0) sub += ' · ' + pct + '% of target';
           return `<div class="cust-row staff-row" data-act="staff-open" data-id="${s.id}" tabindex="0" role="button">
             <span class="cust-main">
@@ -5330,7 +5390,7 @@
     return `<div class="page-head"><div>
         <button class="btn sm ghost" data-act="staff-back">← All staff</button>
         <h2 style="margin-top:10px">${esc(s.name)}</h2>
-        <div class="sub">@${esc(s.username)} · ${esc(S.ROLE_LABEL[s.role] || s.role)} · ${esc(branchName(s.branchId))}</div>
+        <div class="sub">@${esc(s.username)} · ${esc(S.ROLE_LABEL[s.role] || s.role)} · ${esc(staffBranchesLabel(s))}</div>
       </div>
       <div class="row-actions">
         <button class="btn sm" data-act="staff-edit" data-id="${s.id}">Edit</button>
@@ -5931,14 +5991,19 @@
             return `<option value="${r}"${s && s.role === r ? ' selected' : ''}>${S.ROLE_LABEL[r]}</option>`;
           }).join('')}</select></div>
       </div>
-      <div class="grid3">
+      <div class="grid2">
         <div class="field"><label>User ID</label><input class="inp" name="username" required value="${esc(s ? s.username : '')}" autocomplete="off"></div>
         <div class="field"><label>Password</label><input class="inp" name="password" required value="${esc(s ? s.password : '')}" autocomplete="off"></div>
-        <div class="field"><label>Branch</label><select class="inp" name="branchId">${db.branches.map(function (b) {
-          return `<option value="${b.id}"${s && s.branchId === b.id ? ' selected' : ''}>${esc(b.name)}</option>`;
-        }).join('')}</select></div>
       </div>
       <div class="field"><label>Monthly sales target</label><input class="inp" type="number" min="0" step="1" name="target" value="${s ? (s.target || 0) : 0}" placeholder="0 = no target"></div>
+      <div class="section-title" style="margin-top:0">Branch access</div>
+      <div class="hint" style="margin-bottom:8px">Tick every branch this login can use. They pick the active branch from the branch menu at the top, and bills, stock and reports follow it.</div>
+      <div class="perm-grid" style="margin-bottom:14px">
+        ${db.branches.map(function (b) {
+          var on = s ? S.staffBranchIds(s).indexOf(b.id) > -1 : b.id === db.branches[0].id;
+          return `<label class="check"><input type="checkbox" name="branch_${b.id}"${on ? ' checked' : ''}> ${esc(b.name)}</label>`;
+        }).join('')}
+      </div>
       <label class="check" style="margin:4px 0 14px"><input type="checkbox" name="active"${!s || s.active !== false ? ' checked' : ''}> Account is active</label>
       <div class="section-title" style="margin-top:0">Permissions</div>
       <div id="permBox">${permHTML(perms)}</div>
@@ -6018,7 +6083,7 @@
     supplier: { perm: 'purchases', title: 'Delete supplier' },
     expense: { perm: 'expenses', title: 'Delete expense' },
     staff: { perm: 'staff', title: 'Remove staff login' },
-    damage: { perm: 'damage', title: 'Delete damage entry' },
+    damage: { perm: 'damage.delete', title: 'Delete damage entry' },
     transfer: { perm: 'transfer', title: 'Delete stock transfer' },
     complaint: { perm: 'complaints', title: 'Delete complaint', ownerOnly: true }
   };
@@ -7613,7 +7678,10 @@
       if (typeof syncPayments === 'function') syncPayments();
       return render();
     }
-    if (action === 'save-bill') return saveBill(el.getAttribute('data-mode'));
+    if (action === 'save-bill') return billSaveModal(el.getAttribute('data-mode'));
+    if (action === 'bill-save-cancel') return billSaveCancel();
+    if (action === 'bill-save-edit') return billSaveEdit();
+    if (action === 'bill-save-yes') { closeModal(); return saveBill(el.getAttribute('data-mode')); }
     if (action === 'pdf-share') return sharePdf(id, ui.previewStyle);
     if (action === 'pdf-wa') return shareWhatsApp(id, ui.previewStyle);
     if (action === 'pdf-download') return downloadPdf(id, ui.previewStyle);
@@ -7705,7 +7773,12 @@
     if (action === 'lg-csv') return exportLedgerCsv();
     if (action === 'staff-entry-new') return staffEntryModal(id);
 
-    if (action === 'purchase-new') { if (typeof pDraft !== 'undefined') { try { pDraft = null; } catch(e){} } ui.pItemSheet = { open:false,q:'',sel:{} }; return purchaseModal({ fresh: true }); }
+    if (action === 'purchase-new') {
+      if (!canSubmitPurchase()) return toast('You do not have permission to enter purchases');
+      if (typeof pDraft !== 'undefined') { try { pDraft = null; } catch(e){} }
+      ui.pItemSheet = { open:false,q:'',sel:{} };
+      return purchaseModal({ fresh: true });
+    }
     if (action === 'sup-ledger') {
       ui.supMenu = '';
       if (!can('ledgers')) return supplierModal(id);
@@ -7818,7 +7891,10 @@
       return toast('Supplier deleted', { undo: { label: 'Supplier restored', run: function () { db.suppliers.push(supSnap); } } });
     }
     if (action === 'sr-start') { closeModal(); return sreturnModal(id); }
-    if (action === 'dmg-new') return damageModal();
+    if (action === 'dmg-new') {
+      if (!can('damage.entry')) return toast('You do not have permission to record damage');
+      return damageModal();
+    }
     if (action === 'dmg-adjust') {
       if (!can('damage.settle')) return toast('Only the owner can settle — ask the owner for permission');
       var dj = db.damages.filter(function (x) { return x.id === id; })[0];
@@ -7838,7 +7914,7 @@
       return toast(moved ? 'Settled — ' + num(-moved) + ' taken out of stock' : 'Marked settled');
     }
     if (action === 'dmg-del') {
-      if (!can('damage')) return toast('No permission');
+      if (!can('damage.delete')) return toast('You do not have permission to delete damage entries');
       var dmg = db.damages.filter(function (x) { return x.id === id; })[0];
       if (!dmg) return;
       if (!confirm('Delete this entry?')) return;
@@ -8111,7 +8187,15 @@
       db.branchArchive[id] = { id: id, name: brGone.name };
       var moved = 0;
       db.staff.forEach(function (s2) {
-        if (s2.branchId === id) { s2.branchId = keep.id; moved++; }
+        /* a login can be allowed into several branches; drop the deleted one */
+        if (!Array.isArray(s2.branchIds) || !s2.branchIds.length) {
+          s2.branchIds = s2.branchId ? [s2.branchId] : [];
+        }
+        var wasIn = s2.branchIds.indexOf(id) > -1;
+        s2.branchIds = s2.branchIds.filter(function (x) { return x !== id; });
+        if (s2.branchId === id) s2.branchId = s2.branchIds[0] || keep.id;
+        if (wasIn && !s2.branchIds.length) s2.branchIds = [s2.branchId];
+        if (wasIn && s2.branchId === keep.id) moved++;
       });
       db.branches = db.branches.filter(function (b) { return b.id !== id; });
       db.items.forEach(function (it) { if (it.stock) delete it.stock[id]; });
@@ -8594,9 +8678,17 @@
       if (clash) return toast('That user ID is already taken');
       var perms = S.ALL_PERMS.filter(function (k) { return data['perm_' + k]; });
       if (data.role === 'owner') perms = S.ALL_PERMS.slice();
+      /* one login can be allowed into several branches */
+      var branchIds = Object.keys(data).filter(function (k) {
+        return k.indexOf('branch_') === 0 && data[k];
+      }).map(function (k) { return k.slice('branch_'.length); })
+        .filter(function (id) { return !!S.branchById(id); });
+      if (!branchIds.length) return toast('Tick at least one branch for this login');
+      var mainBranch = branchIds.indexOf(data.id ? (staffById(data.id) || {}).branchId : '') > -1
+        ? staffById(data.id).branchId : branchIds[0];
       var sp = {
         name: sname, username: uname, password: pass,
-        role: data.role || 'cashier', branchId: data.branchId || db.branches[0].id,
+        role: data.role || 'cashier', branchId: mainBranch, branchIds: branchIds,
         active: !!data.active, perms: perms,
         target: Math.max(0, Number(data.target) || 0)
       };
@@ -8639,7 +8731,7 @@
 
     if (kind === 'purchase') {
       var st = S.currentStaff();
-      var canSubmit = can('purchases') || (st && (st.role === 'manager' || st.role === 'cashier'));
+      var canSubmit = canSubmitPurchase();
       if (!canSubmit) return toast('No permission to record purchases');
       if (!pDraft) return;
       if (!pDraft.supplierId) return toast('Choose a supplier');
@@ -8847,7 +8939,7 @@
     if (kind === 'complaint' || kind === 'complaint-edit' || kind === 'complaint-supplier') return complaintSubmit(kind, data);
 
     if (kind === 'purchase-pay') {
-      if (!(S.isOwner() || can('purchase.edit'))) return toast('You cannot record purchase payments');
+      if (!(S.isOwner() || canPayPurchase())) return toast('You cannot record purchase payments');
       var pp = db.purchases.filter(function (x) { return x.id === String(data.id || ''); })[0];
       if (!pp) return toast('Purchase not found');
       if (purchaseStatus(pp) !== 'approved') return toast('Only approved purchases can be paid');
@@ -8910,6 +9002,7 @@
     }
 
     if (kind === 'damage') {
+      if (!can('damage.entry')) return toast('You do not have permission to record damage');
       var dname = String(data.itemName || '').trim();
       if (!dname) return toast('Type what was damaged or lost');
       var damount = r2(Number(data.amount) || 0);

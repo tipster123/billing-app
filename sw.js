@@ -2,7 +2,7 @@
    Online it always asks the network first, so a new version of the app is picked up
    on the next reload. Offline it serves the saved copy.
    Bump VERSION whenever the app files change. */
-const VERSION = 'bill-app-v126';
+const VERSION = 'bill-app-v127';
 const CORE = [
   './',
   './index.html',
