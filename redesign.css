@@ -1772,3 +1772,59 @@ html[data-theme="dark"] #pSheetHost .sheet-search .inp {
 .name-pick-row .nm{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .name-pick-row .sub{font-size:11px}
 .name-pick-row.exact{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 8%, var(--surface))}
+
+/* ---------------------------------------------------------------------------
+   Damage / loss on phones — one compact card per entry instead of an eight
+   column table that has to be dragged sideways. Wide screens (>640px) keep
+   the table exactly as it is.
+   ------------------------------------------------------------------------- */
+@media screen and (max-width:640px){
+  .dmg-page .page-head{gap:8px;margin-bottom:8px;align-items:flex-start}
+  .dmg-page .page-head h2{font-size:18px}
+  .dmg-page .page-head .sub{font-size:11.5px;line-height:1.4;margin-top:2px}
+
+  .dmg-page .fwrap{margin-bottom:8px}
+  .dmg-page .fbar{gap:6px}
+  .dmg-page .fbar .searchbox{height:38px}
+  .dmg-page .fbar .searchbox .inp{height:38px;font-size:15px}
+  .dmg-page .fbtn{height:38px;padding:0 10px;font-size:12px}
+
+  .dmg-page .dmg-note-bar{margin:8px 0 !important;padding:7px 10px;font-size:11.5px;line-height:1.4}
+
+  .dmg-page .table-wrap{border:0;background:transparent;box-shadow:none;border-radius:0;overflow:visible}
+  .dmg-page table.data.dmg-table{min-width:0;width:100%;border:0;background:transparent;border-spacing:0}
+  .dmg-page .dmg-table thead{display:none}
+  .dmg-page .dmg-table, .dmg-page .dmg-table tbody{display:block;width:100%}
+  .dmg-page .dmg-table tbody tr{
+    display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:1px 10px;
+    padding:8px 10px;margin:0 0 6px;border:1px solid var(--line);border-radius:10px;
+    background:var(--surface)
+  }
+  .dmg-page .dmg-table tbody tr:last-child{margin-bottom:0}
+  .dmg-page .dmg-table td{
+    display:block;padding:0 !important;border:0 !important;
+    background:transparent !important;white-space:normal;
+    font-size:12.5px;line-height:1.35;vertical-align:top
+  }
+
+  .dmg-page .dmg-date{grid-area:1/1;font-size:11px;color:var(--muted)}
+  .dmg-page .dmg-amt{grid-area:1/2;text-align:right;white-space:nowrap;font-size:13.5px;font-weight:700}
+  .dmg-page .dmg-what{grid-area:2/1;font-size:13px;min-width:0;overflow-wrap:anywhere}
+  .dmg-page .dmg-what b{font-weight:650}
+  .dmg-page .dmg-what .sub{font-size:11px;color:var(--muted)}
+  .dmg-page .dmg-st{grid-area:2/2;text-align:right}
+  .dmg-page .dmg-st .badge{font-size:10px;font-weight:650;padding:2px 8px}
+  .dmg-page .dmg-who{grid-area:3/1;min-width:0;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dmg-page .dmg-acts{grid-area:3/2;display:flex;gap:6px;justify-content:flex-end;align-items:center;white-space:nowrap !important}
+  .dmg-page .dmg-acts .btn.sm{height:28px;min-height:28px;font-size:11.5px;padding:0 9px}
+  .dmg-page .dmg-note{grid-area:4/1;margin-top:2px;min-width:0;font-size:11px;color:var(--muted);line-height:1.35}
+  .dmg-page .dmg-by{grid-area:4/2;margin-top:2px;text-align:right;white-space:nowrap;font-size:10.5px;color:var(--muted-2)}
+  .dmg-page .dmg-by::before{content:"by "}
+
+  .dmg-page .dmg-who.is-empty,
+  .dmg-page .dmg-note.is-empty,
+  .dmg-page .dmg-by.is-empty{display:none}
+
+  .dmg-page .dmg-table tbody tr:nth-child(even) td,
+  .dmg-page .dmg-table tbody tr:hover td{background:transparent !important}
+}
