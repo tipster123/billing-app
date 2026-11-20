@@ -131,6 +131,8 @@ window.Store = (function () {
         expandTable: false, minRows: 0, printTotalQty: true, printDecimals: true,
         printReceived: true, printBalance: true, printCurrentBalance: true,
         printTaxDetails: false, amountGrouping: true, amountWordsFormat: 'indian',
+        roundOffOn: false,
+        stockPolicy: 'warn',
         printYouSaved: true, printDescription: true, printTerms: true,
         printReceivedBy: true, printDeliveredBy: false, printSignature: false,
         signatureText: '', printPaymentMode: true, printAcknowledgement: false,
@@ -313,7 +315,7 @@ window.Store = (function () {
     return d;
   }
 
-  function computeRaw(lines, discount, taxRate, extraCharges, discountType) {
+  function computeRaw(lines, discount, taxRate, extraCharges, discountType, roundOffOpt) {
     var sub = 0, cost = 0, lineDisc = 0;
     (lines || []).forEach(function (l) {
       var ls = r2((Number(l.qty) || 0) * (Number(l.price) || 0));
@@ -334,7 +336,12 @@ window.Store = (function () {
     var rate = Number(taxRate) || 0;
     var tax = r2(taxable * rate / 100);
     var charges = r2((extraCharges || []).reduce(function (s, c) { return s + (Number(c.amount) || 0); }, 0));
-    return { subtotal: sub, lineDisc: lineDisc, billDisc: r2(billDiscount), discount: discountAmt, taxable: taxable, cost: r2(cost), tax: tax, charges: charges, total: r2(taxable + tax + charges) };
+    var raw = r2(taxable + tax + charges);
+    var roundOff = 0;
+    if (typeof roundOffOpt === 'number') roundOff = r2(roundOffOpt);
+    else if (roundOffOpt === true || roundOffOpt === 'nearest') roundOff = r2(Math.round(raw) - raw);
+    var total = r2(raw + roundOff);
+    return { subtotal: sub, lineDisc: lineDisc, billDisc: r2(billDiscount), discount: discountAmt, taxable: taxable, cost: r2(cost), tax: tax, charges: charges, roundOff: roundOff, total: total };
   }
 
   /* ------------------------------------------------------------- persistence */
@@ -372,6 +379,8 @@ window.Store = (function () {
       printPageNumbers:true
     };
     Object.keys(pdefs).forEach(function(k){ if (ps[k] == null) ps[k] = pdefs[k]; });
+    if (ps.roundOffOn == null) ps.roundOffOn = false;
+    ps.stockPolicy = (ps.stockPolicy === 'block') ? 'block' : 'warn';
     ps.extraTopSpace = Math.max(0, Math.min(30, Math.floor(Number(ps.extraTopSpace) || 0)));
     ps.minRows = Math.max(0, Math.min(30, Math.floor(Number(ps.minRows) || 0)));
     var ddef = (base.settings && base.settings.dashboard) || { view:'comfortable', cards:{salesToday:true,salesMonth:true,expensesMonth:true,unpaid:true,myTarget:true}, sections:[{id:'eod',on:true},{id:'kpis',on:true},{id:'target',on:true},{id:'attention',on:true},{id:'complaints',on:true},{id:'collect',on:true},{id:'recent',on:true},{id:'low',on:true}], limits:{recent:40,low:6,collect:4} };
@@ -526,17 +535,118 @@ window.Store = (function () {
     });
   }
 
+  /* ------------------------------------------------------------- passwords
+     Passwords are never kept in clear text. Each one is salted and stretched
+     with PBKDF2-SHA256 through WebCrypto, and only the salt + hash are stored.
+     Old records that still hold a plain `password` are checked once and then
+     upgraded in place, so an existing shop keeps working after the update. */
+  var PBKDF2_ITER = 150000;
+
+  function hexOf(buf) {
+    var bytes = new Uint8Array(buf);
+    var out = '';
+    for (var i = 0; i < bytes.length; i++) out += ('0' + bytes[i].toString(16)).slice(-2);
+    return out;
+  }
+  function newSalt() {
+    var a = new Uint8Array(16);
+    (window.crypto || window.msCrypto).getRandomValues(a);
+    return hexOf(a.buffer);
+  }
+  function subtleCrypto() {
+    var c = window.crypto && (window.crypto.subtle || window.crypto.webkitSubtle);
+    return c || null;
+  }
+  function pbkdf2(password, saltHex, iterations) {
+    var c = subtleCrypto();
+    if (!c) return Promise.reject(new Error('This browser cannot secure passwords'));
+    var pairs = String(saltHex || '').match(/.{2}/g) || [];
+    var salt = new Uint8Array(pairs.map(function (h) { return parseInt(h, 16); }));
+    var enc = new TextEncoder();
+    return c.importKey('raw', enc.encode(String(password)), { name: 'PBKDF2' }, false, ['deriveBits'])
+      .then(function (key) {
+        return c.deriveBits({ name: 'PBKDF2', salt: salt, iterations: iterations || PBKDF2_ITER, hash: 'SHA-256' }, key, 256);
+      })
+      .then(function (bits) { return hexOf(bits); });
+  }
+  function hashPassword(password) {
+    var salt = newSalt();
+    return pbkdf2(password, salt, PBKDF2_ITER).then(function (hash) {
+      return { passHash: hash, passSalt: salt, passIter: PBKDF2_ITER };
+    });
+  }
+  function isHashed(staff) { return !!(staff && staff.passHash && staff.passSalt); }
+  function legacyPassword(staff) {
+    return String(staff && (staff.password != null ? staff.password : staff.pin) || '');
+  }
+  /* compare against whatever form the record is in; never returns the secret */
+  function verifyPassword(password, staff) {
+    if (!staff) return Promise.resolve(false);
+    var p = String(password || '');
+    if (!p) return Promise.resolve(false);
+    if (isHashed(staff)) {
+      return pbkdf2(p, staff.passSalt, staff.passIter || PBKDF2_ITER)
+        .then(function (hash) { return hash === staff.passHash; });
+    }
+    return Promise.resolve(legacyPassword(staff) === p);
+  }
+  function setPassword(staff, password) {
+    var p = String(password || '');
+    if (!staff) return Promise.reject(new Error('No staff account'));
+    if (p.length < 4) return Promise.reject(new Error('Use at least 4 characters'));
+    return hashPassword(p).then(function (rec) {
+      staff.passHash = rec.passHash;
+      staff.passSalt = rec.passSalt;
+      staff.passIter = rec.passIter;
+      staff.passWeak = p === '1234';
+      delete staff.password;
+      delete staff.pin;
+      return staff;
+    });
+  }
+  /* a login still carrying the seeded 1234 has to be changed before it is used */
+  function needsPasswordChange(staff) {
+    if (!staff) return false;
+    if (staff.passWeak) return true;
+    if (!isHashed(staff)) return legacyPassword(staff) === '1234';
+    return false;
+  }
+  function staffHashedCopy(staff) {
+    if (!staff) return null;
+    var c = {};
+    Object.keys(staff).forEach(function (k) { if (k !== 'password' && k !== 'pin') c[k] = staff[k]; });
+    return c;
+  }
+
   function login(username, password) {
     var u = String(username || '').trim().toLowerCase();
     var p = String(password || '');
     var s = db.staff.filter(function (x) {
       return String(x.username || '').toLowerCase() === u && x.active !== false;
     })[0];
-    if (!s) return { error: 'No staff account with that user ID' };
-    if (String(s.password != null ? s.password : s.pin) !== p) return { error: 'Incorrect password' };
-    sessionStaffId = s.id;
-    try { sessionStorage.setItem(SESSION_KEY, s.id); } catch (e) {}
-    return { staff: s };
+    if (!s) return Promise.resolve({ error: 'No staff account with that user ID' });
+    return verifyPassword(p, s).then(function (ok) {
+      if (!ok) return { error: 'Incorrect password' };
+      /* first sign-in on an old record: store the salted hash from now on */
+      if (!isHashed(s)) {
+        var wasWeak = legacyPassword(s) === '1234';
+        return hashPassword(p).then(function (rec) {
+          s.passHash = rec.passHash;
+          s.passSalt = rec.passSalt;
+          s.passIter = rec.passIter;
+          if (wasWeak) s.passWeak = true;
+          delete s.password;
+          delete s.pin;
+          try { save(); } catch (e) {}
+          sessionStaffId = s.id;
+          try { sessionStorage.setItem(SESSION_KEY, s.id); } catch (e) {}
+          return { staff: s, changedDefault: needsPasswordChange(s) };
+        });
+      }
+      sessionStaffId = s.id;
+      try { sessionStorage.setItem(SESSION_KEY, s.id); } catch (e) {}
+      return { staff: s, changedDefault: needsPasswordChange(s) };
+    });
   }
 
   function logout() {
@@ -672,15 +782,20 @@ window.Store = (function () {
     load: load, save: save, saveError: saveError, reset: reset, importData: importData, wasEmpty: wasEmpty,
     get: function () { return db; },
     login: login, logout: logout, currentStaff: currentStaff, isOwner: isOwner, can: can,
+    hashPassword: hashPassword, verifyPassword: verifyPassword, setPassword: setPassword,
+    needsPasswordChange: needsPasswordChange, staffHashedCopy: staffHashedCopy, isHashed: isHashed,
     branchById: branchById, branchName: branchName, myBranchId: myBranchId, staffBranchIds: staffBranchIds,
     canSeeAllBranches: canSeeAllBranches, canSwitchBranches: canSwitchBranches, visibleBranches: visibleBranches,
     migratePerms: migratePerms, migrateStaffPerms: migrateStaffPerms,
     stockOf: stockOf, totalStock: totalStock, addStock: addStock,
     pendingTransfersFor: pendingTransfersFor,
     acceptTransfer: acceptTransfer, rejectTransfer: rejectTransfer,
-    compute: function (lines, discount, taxRate, extraCharges) {
-      var dtype = db && db.settings ? db.settings.discountType : 'amount';
-      return computeRaw(lines, discount, taxRate == null && db ? db.settings.taxRate : taxRate, extraCharges, dtype);
+    compute: function (lines, discount, taxRate, extraCharges, opts) {
+      opts = opts || {};
+      var dtype = opts.discountType || (db && db.settings ? db.settings.discountType : 'amount');
+      var ro = opts.roundOff;
+      if (ro === undefined) ro = (db && db.settings && db.settings.roundOffOn) ? true : false;
+      return computeRaw(lines, discount, taxRate == null && db ? db.settings.taxRate : taxRate, extraCharges, dtype, ro);
     },
     money: money, num: num, r2: r2, today: today, monthStart: monthStart, fmtDate: fmtDate,
     esc: esc, uid: uid, match: match,

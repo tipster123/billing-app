@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v138';
+  var APP_VERSION = 'v139';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -103,8 +103,123 @@
     if (!ui.inv.per) ui.inv.per = 12;
     return ui.inv;
   }
+  var snapDayDone = '';
   function save() {
-    if (S.save()) cloudSchedule();
+    if (S.save()) {
+      cloudSchedule();
+      if (snapDayDone !== today() && captureDailySnapshot()) snapDayDone = today();
+    }
+  }
+
+
+  /* --------------------------------------------------- snapshots and the bin
+     Two safety nets for a shop that only has this browser:
+     • a quiet copy of the whole database is kept once a day (the last 7 days),
+       so "restore from yesterday" exists after a mistake;
+     • deleting a bill, item, party or expense parks it in a 7-day bin instead
+       of throwing it away. */
+  var SNAP_KEY = 'billing.snapshots.v1';
+  var TRASH_KEY = 'billing.trash.v1';
+  var SNAP_KEEP = 7;
+  var TRASH_DAYS = 7;
+
+  function readLocalJson(key, fallback) {
+    try {
+      var raw = localStorage.getItem(key);
+      if (!raw) return fallback;
+      var v = JSON.parse(raw);
+      return v == null ? fallback : v;
+    } catch (e) { return fallback; }
+  }
+  function writeLocalJson(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch (e) { return false; }
+  }
+
+  function snapshots() {
+    var list = readLocalJson(SNAP_KEY, []);
+    return Array.isArray(list) ? list : [];
+  }
+  /* one snapshot per calendar day; older days beyond a week are dropped */
+  function captureDailySnapshot(force) {
+    if (!db || !db.settings) return false;
+    var list = snapshots();
+    var day = today();
+    var last = list[list.length - 1];
+    if (!force && last && last.day === day) return false;
+    try {
+      list.push({ day: day, at: Date.now(), data: JSON.stringify(db) });
+    } catch (e) { return false; }
+    var byDay = {};
+    list.forEach(function (x) { if (x && x.day) byDay[x.day] = x; });
+    var keep = Object.keys(byDay).sort().slice(-SNAP_KEEP).map(function (d) { return byDay[d]; });
+    writeLocalJson(SNAP_KEY, keep);
+    return true;
+  }
+
+  function trashEntries() {
+    var list = readLocalJson(TRASH_KEY, []);
+    if (!Array.isArray(list)) return [];
+    var cut = Date.now() - TRASH_DAYS * 86400000;
+    var live = list.filter(function (x) { return x && x.at >= cut; });
+    if (live.length !== list.length) writeLocalJson(TRASH_KEY, live);
+    return live;
+  }
+  function trashAdd(entry) {
+    if (!entry) return;
+    var list = trashEntries();
+    entry.id = uid();
+    entry.at = Date.now();
+    list.push(entry);
+    writeLocalJson(TRASH_KEY, list.slice(-200));
+  }
+  function trashRestore(trashId) {
+    var list = trashEntries();
+    var e = list.filter(function (x) { return x.id === trashId; })[0];
+    if (!e) return toast('That one is past its 7 days');
+    var arrName = { invoice: 'invoices', item: 'items', customer: 'customers', supplier: 'suppliers',
+      expense: 'expenses', purchase: 'purchases', damage: 'damages', transfer: 'transfers',
+      complaint: 'complaints' }[e.kind];
+    if (!arrName || !e.rec) return toast('This entry cannot be restored');
+    if ((db[arrName] || []).some(function (x) { return x.id === e.rec.id; })) return toast('It is already back');
+    /* the delete put stock back, so restoring takes it out again */
+    (e.stockBack || []).forEach(function (m) {
+      var it = itemById(m.itemId);
+      if (it) S.addStock(it, m.branchId, -(Number(m.qty) || 0));
+    });
+    db[arrName].push(e.rec);
+    writeLocalJson(TRASH_KEY, list.filter(function (x) { return x.id !== trashId; }));
+    save(); render();
+    toast('Restored ' + (e.name || 'entry'));
+  }
+  function trashEmpty() {
+    writeLocalJson(TRASH_KEY, []);
+    save(); render();
+    toast('Bin emptied');
+  }
+
+  /* the settings page gets a card for both nets */
+  function safetyNetHTML() {
+    var snaps = snapshots();
+    var older = snaps.filter(function (x) { return x.day < today(); });
+    var latest = older[older.length - 1];
+    var bin = trashEntries();
+    var binRows = bin.slice().reverse().slice(0, 20).map(function (e) {
+      var age = Math.ceil((TRASH_DAYS * 86400000 - (Date.now() - e.at)) / 86400000);
+      return `<div class="rrow"><div class="grow"><div class="title">${esc(e.name || 'Entry')}</div>
+        <div class="sub">${esc(e.sub || '')} · ${esc(e.kind)} · ${age > 0 ? age + ' day' + (age === 1 ? '' : 's') + ' left' : 'last day'}</div></div>
+        <div class="amt"><button class="btn sm" data-act="trash-restore" data-id="${esc(e.id)}">Restore</button></div></div>`;
+    }).join('');
+    return `<div class="card"><h3>Yesterday and the bin</h3>
+      <div class="sub" style="margin-bottom:10px">A copy of everything is saved once a day on this device — the last ${SNAP_KEEP} days. Deleted bills, items, parties and expenses wait in the bin for ${TRASH_DAYS} days.</div>
+      <div class="row-actions" style="margin-bottom:12px">
+        <button class="btn" data-act="restore-yesterday"${latest ? '' : ' disabled'}>Restore from ${latest ? fmtDate(latest.day) : 'yesterday'}</button>
+        <button class="btn" data-act="snapshot-now">Save a copy now</button>
+      </div>
+      <div class="sub" style="margin-bottom:6px">${snaps.length ? 'Copies kept: ' + snaps.map(function (x) { return fmtDate(x.day); }).join(', ') : 'No daily copy yet — one is made the first time the app is opened each day.'}</div>
+      <div class="section-title" style="margin-top:12px">In the bin</div>
+      ${binRows || '<div class="sub">Nothing deleted in the last ' + TRASH_DAYS + ' days.</div>'}
+      ${bin.length ? '<div class="row-actions" style="margin-top:10px"><button class="btn danger sm" data-act="trash-empty">Empty the bin</button></div>' : ''}
+    </div>`;
   }
 
   /* Writing to the browser can fail (storage full, private mode, blocked site
@@ -693,6 +808,45 @@
     });
   }
 
+  /* after a cloud copy is loaded, make sure bill and estimate numbers are
+     unique — two devices that billed offline can mint the same number */
+  function cloudEnsureUniqueNos() {
+    if (!db) return false;
+    var changed = false;
+    var seen = Object.create(null);
+    (db.invoices || []).slice().sort(function (a, b) {
+      return (a.created || 0) - (b.created || 0) || String(a.id || '').localeCompare(String(b.id || ''));
+    }).forEach(function (inv) {
+      var no = String(inv.no || '');
+      if (!no) return;
+      if (!seen[no]) { seen[no] = inv; return; }
+      var pref = branchPrefix(inv.branchId);
+      var seq = nextBillSeq();
+      var nno = pref + '-' + seq;
+      while (db.invoices.some(function (x) { return x !== inv && x.no === nno; })) { seq++; nno = pref + '-' + seq; }
+      inv.no = nno;
+      db.counter = Math.max(Number(db.counter) || 0, seq);
+      seen[nno] = inv;
+      changed = true;
+    });
+    var seenE = Object.create(null);
+    (db.estimates || []).slice().sort(function (a, b) {
+      return (a.created || 0) - (b.created || 0) || String(a.id || '').localeCompare(String(b.id || ''));
+    }).forEach(function (est) {
+      var no = String(est.no || '');
+      if (!no) return;
+      if (!seenE[no]) { seenE[no] = est; return; }
+      var seq = nextEstSeq();
+      var nno = 'EST-' + seq;
+      while ((db.estimates || []).some(function (x) { return x !== est && x.no === nno; })) { seq++; nno = 'EST-' + seq; }
+      est.no = nno;
+      db.ecounter = Math.max(Number(db.ecounter) || 0, seq);
+      seenE[nno] = est;
+      changed = true;
+    });
+    return changed;
+  }
+
   /* replace this device's data with the downloaded copy and remember what was
      downloaded, so the next save only uploads real changes */
   function cloudApplyCopy(fetched) {
@@ -707,6 +861,7 @@
     fresh.pcounter = cnt.pcounter;
     fresh.rcounter = cnt.rcounter;
     db = S.importData(fresh);
+    cloudEnsureUniqueNos();
     db.settings.cloud = keep;
     S.save();
     try { localStorage.removeItem(CLOUD_SYNC_KEY); } catch (e) {}
@@ -932,16 +1087,42 @@
 
   function doLogin(e) {
     e.preventDefault();
-    var res = S.login($('#loginUser').value, $('#loginPass').value);
-    if (res.error) { toast(res.error); return; }
-    db = S.get();
-    ui.branch = startBranchId();
-    ui.tab = firstTab();
-    newBill();
-    $('#login').hidden = true;
-    $('#app').style.display = '';
-    render();
-    toast('Welcome, ' + res.staff.name);
+    var uEl = $('#loginUser'), pEl = $('#loginPass');
+    var btn = document.querySelector('#loginForm button[type="submit"]');
+    if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
+    S.login(uEl ? uEl.value : '', pEl ? pEl.value : '').then(function (res) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Sign in'; }
+      if (!res || res.error) { toast((res && res.error) || 'Could not sign in'); return; }
+      db = S.get();
+      ui.branch = startBranchId();
+      ui.tab = firstTab();
+      newBill();
+      $('#login').hidden = true;
+      $('#app').style.display = '';
+      render();
+      toast('Welcome, ' + res.staff.name);
+      if (res.changedDefault) setTimeout(forcePasswordChange, 250);
+    }).catch(function (err) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Sign in'; }
+      toast(String((err && err.message) || err || 'Could not sign in'));
+    });
+  }
+
+  /* the seeded 1234 is not a real password — a new one is asked for right after
+     the first sign-in so the shop is never left on the factory code */
+  function forcePasswordChange() {
+    var me = S.currentStaff();
+    if (!me) return;
+    openModal('Set your password', `<form data-form="force-password">
+      <div class="sub" style="margin-bottom:10px">The default password 1234 must be changed before the shop is used.</div>
+      <div class="field"><label>New password for ${esc(me.name)}</label>
+        <input class="inp" type="password" name="pass1" required minlength="4" autocomplete="new-password" placeholder="At least 4 characters"></div>
+      <div class="field"><label>Type it again</label>
+        <input class="inp" type="password" name="pass2" required minlength="4" autocomplete="new-password"></div>
+      <div class="row-actions" style="justify-content:flex-end;margin-top:12px">
+        <button class="btn primary" type="submit">Save password</button>
+      </div>
+    </form>`);
   }
 
   function doLogout() {
@@ -956,7 +1137,7 @@
     $('#login').hidden = false;
     $('#loginBiz').textContent = (db.settings && db.settings.business) || 'My Store';
     var owner = db.staff.filter(function (s) { return s.role === 'owner'; })[0];
-    var def = owner && owner.password === '1234';
+    var def = owner && S.needsPasswordChange(owner);
     $('#loginHint').innerHTML = def
       ? 'Default owner login: <b>owner</b> / <b>1234</b> — change it in Staff &amp; access.'
       : 'Ask the owner for your user ID and password.';
@@ -1065,6 +1246,58 @@
     render();
     toast('Back to bills — ' + no + ' was not changed');
   }
+
+
+  /* global search — bill no, customer phone/name, item name/SKU */
+  function globalSearchResults(q) {
+    q = String(q || '').trim();
+    if (q.length < 2) return { bills: [], items: [], customers: [] };
+    var bills = (db.invoices || []).filter(function (inv) {
+      var c = findCust(inv.customerId);
+      return match(inv.no, q) || (c && (match(c.name, q) || match(c.phone, q)));
+    }).slice(0, 8);
+    var items = (db.items || []).filter(function (it) {
+      return match(it.name, q) || match(it.sku, q) || match(it.category, q);
+    }).slice(0, 8);
+    var customers = (db.customers || []).filter(function (c) {
+      return match(c.name, q) || match(c.phone, q);
+    }).slice(0, 6);
+    return { bills: bills, items: items, customers: customers };
+  }
+  function globalSearchHTML(q) {
+    var r = globalSearchResults(q);
+    if (!q || q.length < 2) return '<div class="sub">Type at least 2 characters to search bills, customers, items and SKUs.</div>';
+    var out = '';
+    if (r.bills.length) {
+      out += '<div class="section-title" style="margin:8px 0 4px">Bills</div>' + r.bills.map(function (inv) {
+        var c = findCust(inv.customerId);
+        return '<button type="button" class="row between" style="width:100%;text-align:left;padding:10px;border:1px solid var(--line,#e5e7eb);border-radius:10px;margin:4px 0;background:var(--card,#fff)" data-act="gsearch-bill" data-id="' + esc(inv.id) + '">'
+          + '<span><b>' + esc(inv.no) + '</b> · ' + esc(c ? c.name : 'Walk-in') + (c && c.phone ? ' · ' + esc(c.phone) : '') + '</span>'
+          + '<span>' + money(inv.total) + '</span></button>';
+      }).join('');
+    }
+    if (r.items.length) {
+      out += '<div class="section-title" style="margin:8px 0 4px">Items</div>' + r.items.map(function (it) {
+        return '<button type="button" class="row between" style="width:100%;text-align:left;padding:10px;border:1px solid var(--line,#e5e7eb);border-radius:10px;margin:4px 0;background:var(--card,#fff)" data-act="gsearch-item" data-id="' + esc(it.id) + '">'
+          + '<span><b>' + esc(it.name) + '</b>' + (it.sku ? ' · ' + esc(it.sku) : '') + (it.category ? ' · ' + esc(it.category) : '') + '</span>'
+          + '<span>' + money(it.price) + '</span></button>';
+      }).join('');
+    }
+    if (r.customers.length) {
+      out += '<div class="section-title" style="margin:8px 0 4px">Customers</div>' + r.customers.map(function (c) {
+        return '<button type="button" class="row between" style="width:100%;text-align:left;padding:10px;border:1px solid var(--line,#e5e7eb);border-radius:10px;margin:4px 0;background:var(--card,#fff)" data-act="gsearch-customer" data-id="' + esc(c.id) + '">'
+          + '<span><b>' + esc(c.name || 'Customer') + '</b></span>'
+          + '<span>' + esc(c.phone || '') + '</span></button>';
+      }).join('');
+    }
+    if (!out) out = '<div class="sub">No bills, items or customers match "' + esc(q) + '".</div>';
+    return out;
+  }
+  function openGlobalSearch() {
+    openModal('Search', '<div class="field"><label>Search</label><input class="inp" id="gSearchInp" type="search" data-input="g-search" placeholder="Bill no, customer phone, item name or SKU" autocomplete="off"></div><div id="gSearchOut" style="margin-top:8px;max-height:60vh;overflow:auto">' + globalSearchHTML('') + '</div>');
+    setTimeout(function(){ var inp = document.getElementById('gSearchInp'); if (inp) { inp.focus(); try{ inp.select(); }catch(e){} } }, 30);
+  }
+
 
   function render() {
     if (!S.currentStaff()) { showLogin(); return; }
@@ -1177,7 +1410,7 @@
     var sales = 0, gross = 0;
     db.invoices.forEach(function (i) {
       if (i.branchId !== branchId || i.date < from || i.date > to) return;
-      var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i));
+      var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i), { roundOff: (typeof i.roundOff === 'number' ? i.roundOff : 0) });
       sales += t.taxable;
       gross += (t.taxable - t.cost);
     });
@@ -1209,7 +1442,7 @@
     return r2(share);
   }
   function billProfit(inv) {
-    var t = S.compute(inv.lines, inv.discount, inv.taxRate, invoiceCharges(inv));
+    var t = S.compute(inv.lines, inv.discount, inv.taxRate, invoiceCharges(inv), { roundOff: (typeof inv.roundOff === 'number' ? inv.roundOff : 0) });
     return r2((t.taxable - t.cost) - linkedExpenseShare(inv));
   }
   function customerProfit(cid, from, to) {
@@ -1218,7 +1451,7 @@
       if (i.customerId !== cid) return;
       if (from && i.date < from) return;
       if (to && i.date > to) return;
-      var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i));
+      var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i), { roundOff: (typeof i.roundOff === 'number' ? i.roundOff : 0) });
       out.n++;
       out.sales += t.taxable;
       out.profit += (t.taxable - t.cost);
@@ -1758,6 +1991,7 @@
             return `<div class="dc-charge-row"><label class="dc-check-row"><input type="checkbox" data-change="bill-charge" data-id="${i}"${c.on ? ' checked' : ''}> <span>${esc(c.name)}</span></label><div class="dc-right"><span class="dc-box">₹</span><input class="inp dc-amt" type="text" inputmode="decimal" min="0" step="0.01" data-input="bill-charge-amount" data-id="${i}" value="${c.amount || 0}" aria-label="${esc(c.name)} amount"></div></div>`;
           }).join('')}
         </div>` : ''}
+        ${t.roundOff ? `<div class="dc-total-row"><span>Round off</span><b>${t.roundOff > 0 ? '+ ' : '− '}${money(Math.abs(t.roundOff))}</b></div>` : ''}
         <div class="dc-total-row"><span>${isEst ? 'Estimate Amount' : 'Total Amount'}</span><b>${money(t.total)}</b></div>
         ${isEst ? '' : `<div class="dc-total-row recv"><span>Received</span><b>${money(paid)}</b></div>
         <div class="dc-total-row due"><span>Balance Due</span><b>${money(Math.max(0, due))}</b></div>`}
@@ -1827,6 +2061,10 @@
     var ldisc = Math.min(gross, Math.max(0, r2(Number(l.disc) || 0)));
     var lineAmt = r2(gross - ldisc);
     var taxShow = (db.settings && db.settings.taxOn !== false && (Number(db.settings.taxRate) || 0) > 0);
+    var it = itemById(l.itemId);
+    var brId = billBranchId();
+    var have = it ? (Number(S.stockOf(it, brId)) || 0) : null;
+    var over = (have != null && qty > have + 0.0001);
     return `<div class="billed-item" data-act="line-more" data-id="${i}" role="button" tabindex="0">
       <div class="bi-top">
         <div class="bi-left"><span class="bi-no">#${i + 1}</span><span class="bi-name">${esc(l.name)}</span></div>
@@ -1835,6 +2073,7 @@
       <div class="bi-row"><span>Item Subtotal</span><span>${num(qty)} x ${num(price)} = ${num(gross)}</span></div>
       ${ldisc > 0 ? `<div class="bi-row bi-muted"><span>Item discount</span><span>− ${money(ldisc)}</span></div>` : ''}
       ${taxShow ? `<div class="bi-row bi-muted"><span>Tax : 0%</span><span>${money(0)}</span></div>` : ''}
+      ${over ? `<div class="bi-details" style="color:var(--danger,#b91c1c)">Only ${num(have)} in ${esc(branchName(brId))}</div>` : ''}
       ${details.length ? `<div class="bi-details">${details.join(' · ')}</div>` : ''}
     </div>`;
   }
@@ -1865,13 +2104,52 @@
     </form>`);
   }
 
+
+  function billBranchId() {
+    return (ui.bill && ui.bill.editId) ? (ui.bill.editBranch || ui.branch) : ui.branch;
+  }
+  function stockOverLines(lines, branchId) {
+    var by = Object.create(null);
+    (lines || []).forEach(function (l) {
+      if (!l.itemId) return;
+      by[l.itemId] = r2((by[l.itemId] || 0) + (Number(l.qty) || 0));
+    });
+    var over = [];
+    Object.keys(by).forEach(function (id) {
+      var it = itemById(id); if (!it) return;
+      var have = Number(S.stockOf(it, branchId)) || 0;
+      var need = Number(by[id]) || 0;
+      if (need > have + 0.0001) over.push({ it: it, need: need, have: have, short: r2(need - have) });
+    });
+    return over;
+  }
+  function oversellMsg(over, branchId) {
+    var br = branchName(branchId);
+    return (over || []).map(function (o) { return 'Only ' + num(o.have) + ' in ' + br + ' for ' + o.it.name; }).join('. ');
+  }
+  function allowOversell(over, branchId) {
+    var policy = (db.settings && db.settings.stockPolicy) || 'warn';
+    var msg = oversellMsg(over, branchId);
+    if (policy === 'block') { toast(msg || 'Not enough stock in this branch'); return false; }
+    return confirm((msg ? msg + '. ' : '') + 'Sell anyway? stock will go negative');
+  }
+
+
   function addToCart(id, opts) {
     opts = opts || {};
     var it = itemById(id);
     if (!it) return;
     var addQty = Math.max(1, Math.floor(Number(opts.qty) || 1));
+    if (ui.bill && ui.bill.kind !== 'estimate') {
+      var brId = billBranchId();
+      var next = (ui.bill.lines || []).map(function (l) { return { itemId: l.itemId, qty: l.qty }; });
+      var hit = next.filter(function (l) { return l.itemId === id; })[0];
+      if (hit) hit.qty = r2((Number(hit.qty) || 0) + addQty); else next.push({ itemId: id, qty: addQty });
+      var over = stockOverLines(next, brId);
+      if (over.length && !opts.force && !allowOversell(over, brId)) return;
+    }
     var line = ui.bill.lines.filter(function (l) { return l.itemId === id; })[0];
-    if (line) line.qty = Number(line.qty) + addQty;
+    if (line) line.qty = r2((Number(line.qty) || 0) + addQty);
     else ui.bill.lines.push({ itemId: it.id, name: it.name, qty: addQty, price: Number(it.price) || 0, cost: Number(it.cost) || 0, disc: 0, desc: '', imei: '', serial: '' });
     if (!opts.silent) {
       ui.q = '';
@@ -1968,15 +2246,25 @@
     var newMap = lineQtyMap(b.lines);
     var keys = Object.keys(newMap);
     Object.keys(oldMap).forEach(function (k) { if (keys.indexOf(k) < 0) keys.push(k); });
+    var overDelta = [];
     for (var i = 0; i < keys.length; i++) {
       var delta = r2((newMap[keys[i]] || 0) - (oldMap[keys[i]] || 0));
       if (delta > 0) {
         var chk = itemById(keys[i]);
         if (!chk) return toast('One of the items is no longer in your list');
-        if (S.stockOf(chk, inv.branchId) < delta) {
-          return toast('Only ' + num(S.stockOf(chk, inv.branchId)) + ' more ' + chk.name + ' in stock');
+        var have = Number(S.stockOf(chk, inv.branchId)) || 0;
+        if (have < delta) {
+          overDelta.push({ it: chk, need: delta, have: have, short: r2(delta - have) });
         }
       }
+    }
+    if (overDelta.length) {
+      var policy = (db.settings && db.settings.stockPolicy) || 'warn';
+      if (policy === 'block') {
+        return toast('Only ' + num(overDelta[0].have) + ' more ' + overDelta[0].it.name + ' in stock');
+      }
+      var msg = overDelta.map(function (o) { return 'Only ' + num(o.have) + ' more ' + o.it.name + ' in ' + branchName(inv.branchId); }).join('. ');
+      if (!confirm((msg ? msg + '. ' : '') + 'Sell anyway? stock will go negative')) return;
     }
 
     var snapshot = JSON.parse(JSON.stringify(inv));
@@ -2004,6 +2292,7 @@
     inv.subtotal = t.subtotal;
     inv.taxRate = taxRate;
     inv.tax = t.tax;
+    inv.roundOff = r2(t.roundOff || 0);
     inv.total = t.total;
     inv.paid = paid;
     inv.payments = payments;
@@ -2097,11 +2386,15 @@
       .map(function (p) { return { method: p.method, amount: r2(p.amount) }; });
     var paid = r2(payments.reduce(function (s, p) { return s + p.amount; }, 0));
     if (paid > t.total + 0.009) return toast('Payments are more than the total');
+    var over = stockOverLines(b.lines, ui.branch);
+    if (over.length && !allowOversell(over, ui.branch)) return;
     var seq = nextBillSeq();
+    var invNo = branchPrefix(ui.branch) + '-' + seq;
+    while (db.invoices.some(function (x) { return x.no === invNo; })) { seq++; invNo = branchPrefix(ui.branch) + '-' + seq; }
     db.counter = seq;
     var staff = S.currentStaff();
     var inv = {
-      id: uid(), no: branchPrefix(ui.branch) + '-' + seq,
+      id: uid(), no: invNo,
       date: (b.date && /^\d{4}-\d{2}-\d{2}$/.test(b.date)) ? b.date : today(), created: Date.now(),
       branchId: ui.branch, staffId: staff ? staff.id : '',
       customerId: b.customerId || '',
@@ -2112,7 +2405,7 @@
       fields: (db.settings.billFields || [])
         .map(function (f) { return { label: f.label, value: String((b.fields || {})[f.id] || '').trim() }; })
         .filter(function (f) { return f.value; }),
-      subtotal: t.subtotal, tax: t.tax, total: t.total,
+      subtotal: t.subtotal, tax: t.tax, roundOff: r2(t.roundOff || 0), total: t.total,
       paid: paid,
       payments: payments,
       emi: emiFromPayments(),
@@ -2138,10 +2431,12 @@
     var b = ui.bill;
     var t = billTotals();
     var seq = nextEstSeq();
+    var estNo = 'EST-' + seq;
+    while ((db.estimates || []).some(function (x) { return x.no === estNo; })) { seq++; estNo = 'EST-' + seq; }
     db.ecounter = seq;
     var staff = S.currentStaff();
     var est = {
-      id: uid(), no: 'EST-' + seq,
+      id: uid(), no: estNo,
       date: (b.date && /^\d{4}-\d{2}-\d{2}$/.test(b.date)) ? b.date : today(), created: Date.now(),
       branchId: ui.branch, staffId: staff ? staff.id : '',
       customerId: b.customerId || '',
@@ -2152,7 +2447,7 @@
       fields: (db.settings.billFields || [])
         .map(function (f) { return { label: f.label, value: String((b.fields || {})[f.id] || '').trim() }; })
         .filter(function (f) { return f.value; }),
-      subtotal: t.subtotal, tax: t.tax, total: t.total,
+      subtotal: t.subtotal, tax: t.tax, roundOff: r2(t.roundOff || 0), total: t.total,
       note: '', convertedAt: 0, convertedNo: ''
     };
     db.estimates.push(est);
@@ -5410,7 +5705,7 @@
     var inv = scopeInvoices().filter(function (i) { return i.date >= from && i.date <= to; });
     var sales = 0, tax = 0, cost = 0, disc = 0;
     inv.forEach(function (i) {
-      var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i));
+      var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i), { roundOff: (typeof i.roundOff === 'number' ? i.roundOff : 0) });
       sales += t.taxable; tax += t.tax; cost += t.cost; disc += t.discount;
     });
     var gross = r2(sales - cost);
@@ -5458,7 +5753,7 @@
 
     var byDay = {};
     inv.forEach(function (i) {
-      var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i));
+      var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i), { roundOff: (typeof i.roundOff === 'number' ? i.roundOff : 0) });
       if (!byDay[i.date]) byDay[i.date] = { n: 0, total: 0, profit: 0 };
       byDay[i.date].n++; byDay[i.date].total += i.total; byDay[i.date].profit += (t.taxable - t.cost);
     });
@@ -5466,7 +5761,7 @@
 
     var byItem = {};
     inv.forEach(function (i) {
-      var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i));
+      var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i), { roundOff: (typeof i.roundOff === 'number' ? i.roundOff : 0) });
       i.lines.forEach(function (l) {
         var k = l.itemId || l.name;
         if (!byItem[k]) byItem[k] = { name: l.name, qty: 0, revenue: 0, profit: 0 };
@@ -5482,7 +5777,7 @@
     var byProfit = allItems.slice().sort(function (a, b) { return b.profit - a.profit; }).slice(0, 5);
     var byItemCat = {};
     inv.forEach(function (i) {
-      var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i));
+      var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i), { roundOff: (typeof i.roundOff === 'number' ? i.roundOff : 0) });
       i.lines.forEach(function (l) {
         var it = itemById(l.itemId);
         var cat = (it && it.category) || 'Uncategorised';
@@ -5880,6 +6175,8 @@
         <div class="sub" style="margin-top:10px">Open Edit on a branch to set its monthly sales and profit targets.</div>
       </div>
 
+      ${safetyNetHTML()}
+
       <div class="card"><h3>Backup &amp; restore</h3>
         <div class="sub" style="margin-bottom:12px">Everything (including staff accounts) is stored in this browser. Download a backup before clearing browser data or moving device.</div>
         <div class="row-actions">
@@ -5916,6 +6213,14 @@
     var opt = function(val, cur, label){ return `<option value="${val}"${cur===val?' selected':''}>${label}</option>`; };
     return head + `
       <form data-form="invoicesettings">
+        <div class="card pset-card"><div class="pset-head">Billing behaviour</div>
+          <div class="pset-row"><label>When billing more than stock</label>
+            <select class="inp sm" name="stockPolicy">
+              ${opt('warn', s.stockPolicy || 'warn', 'Warn, but allow')}
+              ${opt('block', s.stockPolicy || 'warn', 'Block the save')}
+            </select></div>
+          <div class="hint">A warning shows how much is in the branch and asks before the bill goes negative. Block stops the save until the quantity is fixed.</div>
+        </div>
         <div class="card pset-card"><div class="pset-head">Themes</div>
           <div class="pset-row"><label>Default layout</label>
             <select class="inp sm" name="receiptStyle">${BILL_LAYOUTS.map(function(l){return `<option value="${l.id}"${rstyle===l.id?' selected':''}>${l.name}</option>`;}).join('')}</select></div>
@@ -5975,6 +6280,7 @@
           <div class="pset-row"><label>Amount in words format</label>
             <select class="inp sm" name="amountWordsFormat">${opt('indian',s.amountWordsFormat||'indian','Indian (1,00,00,000)')}${opt('intl',s.amountWordsFormat||'indian','International (100,000,000)')}</select></div>
           <label class="pset-toggle"><span>You Saved</span><input type="checkbox" name="printYouSaved"${on('printYouSaved',1)?' checked':''}></label>
+          <label class="pset-toggle"><span>Round off total to nearest rupee</span><input type="checkbox" name="roundOffOn"${on("roundOffOn",0)?" checked":""}></label>
         </div>
 
         <div class="card pset-card"><div class="pset-head">Footer</div>
@@ -6366,7 +6672,7 @@
       </div>
       <div class="grid2">
         <div class="field"><label>User ID</label><input class="inp" name="username" required value="${esc(s ? s.username : '')}" autocomplete="off"></div>
-        <div class="field"><label>Password</label><input class="inp" name="password" required value="${esc(s ? s.password : '')}" autocomplete="off"></div>
+        <div class="field"><label>Password</label><input class="inp" name="password" value="" autocomplete="new-password" placeholder="${s ? 'Leave blank to keep the current one' : 'At least 4 characters'}"${s ? '' : ' required'}></div>
       </div>
       <div class="field"><label>Monthly sales target</label><input class="inp" type="text" inputmode="numeric" min="0" step="1" name="target" value="${s ? (s.target || 0) : 0}" placeholder="0 = no target"></div>
       <div class="section-title" style="margin-top:0">Branch access</div>
@@ -6575,7 +6881,7 @@
         <div class="sub">${esc(info.sub)}</div>
       </div>
       ${info.effects.length ? `<div class="sub" style="margin-bottom:10px">${info.effects.map(function (t) { return '• ' + esc(t); }).join('<br>')}</div>` : ''}
-      <div class="sub" style="margin-bottom:14px;color:#dc2626">It is deleted here and in Supabase too.</div>
+      <div class="sub" style="margin-bottom:14px;color:#dc2626">It is removed from here and from the cloud copy. Bills, items, parties and expenses wait in the bin for 7 days, so this can still be undone.</div>
       <div class="row-actions" style="justify-content:flex-end">
         <button class="btn" type="button" data-act="close-modal">Keep it</button>
         <button class="btn danger" type="button" data-act="del-yes">Delete</button>
@@ -6817,7 +7123,7 @@
   function billData(inv) {
     var s = db.settings;
     var est = !!inv.isEstimate;
-    var t = S.compute(inv.lines, inv.discount, inv.taxRate, invoiceCharges(inv));
+    var t = S.compute(inv.lines, inv.discount, inv.taxRate, invoiceCharges(inv), { roundOff: (typeof inv.roundOff === 'number' ? inv.roundOff : 0) });
     var discParts = billDiscParts(inv);
     var c = findCust(inv.customerId), st = staffById(inv.staffId), br = S.branchById(inv.branchId);
     var due = est ? 0 : r2(inv.total - inv.paid);
@@ -6880,6 +7186,7 @@
     if ((Number(d.billDisc) || 0) > 0) out += sum('Bill discount', '− ' + bmon(d.billDisc));
     if (s.printTaxDetails === false ? false : Number(inv.taxRate)) out += sum('Tax ' + num(inv.taxRate) + '%', bmon(d.t.tax));
     out += d.charges.map(function (ch) { return sum(esc(ch.name), bmon(ch.amount)); }).join('');
+    if (d.t.roundOff) out += sum('Round off', (d.t.roundOff > 0 ? '+ ' : '− ') + bmon(Math.abs(d.t.roundOff)));
     out += sum('Total', bmon(d.t.total) + ' (' + esc(amountInWords(d.t.total, s.amountWordsFormat || 'indian')) + ')', 'total');
     if (s.printReceived !== false) {
       out += d.pays.length
@@ -7225,6 +7532,7 @@
           <div style="padding:4px 8px;border-right:1px solid #111827">Sub Total: <b>${bmon(d.t.subtotal)}</b></div>
           ${d.lineDisc > 0 ? `<div style="padding:4px 8px;border-right:1px solid #111827">Item discounts: <b>− ${bmon(d.lineDisc)}</b></div>` : ''}
           ${d.billDisc > 0 ? `<div style="padding:4px 8px;border-right:1px solid #111827">Bill discount: <b>− ${bmon(d.billDisc)}</b></div>` : ''}
+          ${d.t.roundOff ? `<div style="padding:4px 8px;border-right:1px solid #111827">Round off: <b>${d.t.roundOff > 0 ? '+ ' : '− '}${bmon(Math.abs(d.t.roundOff))}</b></div>` : ''}
           <div style="padding:4px 8px">Total: <b>${bmon(d.t.total)}</b> (${esc(amountInWords(d.t.total, s.amountWordsFormat || 'indian'))})</div>
         </div>
         ${strip5.length ? `<div class="a5-strip a5-strip-5">${strip5.join('')}</div>` : ''}
@@ -7304,6 +7612,7 @@
         ${((function(){var p=billDiscParts(inv); return p.billDisc>0 ? sum('Bill discount', '− ' + bmon(p.billDisc)) : ''; })())}
         ${(s.printTaxDetails && Number(inv.taxRate)) ? sum('Tax ' + num(inv.taxRate) + '%', bmon(t.tax)) : ''}
         ${charges.map(function (ch) { return sum(esc(ch.name), bmon(ch.amount)); }).join('')}
+        ${t.roundOff ? sum('Round off', (t.roundOff > 0 ? '+ ' : '− ') + bmon(Math.abs(t.roundOff))) : ''}
         ${sum('Total', bmon(t.total) + ' (' + esc(amountInWords(t.total, s.amountWordsFormat || 'indian')) + ')', 'strong')}
         ${s.printReceived!==false ? (pays.length ? pays.map(function (x) { return sum(esc(x.method), bmon(x.amount)); }).join('') : (Number(inv.paid) > 0 ? sum('Paid', bmon(inv.paid)) : '')) : ''}
         ${s.printBalance!==false && due > 0.009 ? sum('Balance due', bmon(due), 'due') : ''}
@@ -7322,6 +7631,321 @@
 
   /* ---- PDF: rendered from the very same HTML the preview shows ---- */
   function docWidthPx(style) { return billStyle(style) === 'receipt' ? 302 : 703; }
+
+  /* --------------------------------------------------- printed-page PDF (text)
+     A5 / GST / Modern pages are drawn as real text and rules, so the file stays
+     small, the words can be searched and nothing is blurry when zoomed. Only the
+     80mm receipt still needs a picture, because it is a narrow layout with
+     wrapped item names. */
+  function pdfMoney(n) {
+    var v = Number(n) || 0;
+    var neg = v < 0;
+    v = Math.abs(v);
+    var s = v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return (neg ? '-Rs ' : 'Rs ') + s;
+  }
+  function pdfQty(n) {
+    var v = Number(n) || 0;
+    return (Math.round(v * 1000) / 1000).toLocaleString('en-IN');
+  }
+
+  function buildTextPdf(inv, style) {
+    var C = pdfCtor();
+    if (!C) return null;
+    var st = billStyle(style);
+    var d = billData(inv);
+    var s = d.s || {};
+    var a5 = st === 'a5';
+    var doc = a5
+      ? new C({ unit: 'mm', format: 'a5', orientation: 'landscape' })
+      : new C({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+    var W = doc.internal.pageSize.getWidth();
+    var H = doc.internal.pageSize.getHeight();
+    var m = a5 ? 10 : 15;
+    var right = W - m;
+    var y = m;
+    var small = a5 ? 7.2 : 8.2;
+    var body = a5 ? 8.4 : 9.4;
+    var head = a5 ? 12 : 15;
+    var ink = function (r, g, b) { doc.setTextColor(r, g, b); };
+    var rule = function (yy, faint) {
+      doc.setDrawColor(faint ? 226 : 205, faint ? 230 : 210, faint ? 236 : 216);
+      doc.setLineWidth(faint ? 0.15 : 0.25);
+      doc.line(m, yy, right, yy);
+    };
+    var ensure = function (h) {
+      if (y + h <= H - m) return;
+      doc.addPage();
+      y = m;
+    };
+
+    /* --------------------------------------------------------------- heading */
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(head);
+    ink(17, 24, 39);
+    doc.text(String(s.business || 'My Store'), m, y + 4);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(small + 1);
+    ink(90, 100, 115);
+    doc.text(inv.isEstimate ? 'ESTIMATE' : (s.gstin ? 'TAX INVOICE' : 'INVOICE'), right, y + 4, { align: 'right' });
+
+    y += 9;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(small);
+    ink(75, 85, 99);
+    var linesA = [];
+    if (d.br) linesA.push(d.br.name + (d.br.address ? ' · ' + d.br.address : ''));
+    else if (d.addr) linesA.push(String(d.addr));
+    if (d.contact) linesA.push(String(d.contact));
+    if (s.gstin) linesA.push('GSTIN ' + s.gstin);
+    linesA.forEach(function (t) {
+      var wrapped = doc.splitTextToSize(String(t), right - m - 55);
+      wrapped.forEach(function (ln) { doc.text(ln, m, y); y += small * 0.52 + 1.1; });
+    });
+
+    /* meta block sits on the right, level with the shop block */
+    var metaY = m + 9;
+    var meta = [
+      ['No', String(inv.no)],
+      ['Date', fmtDate(inv.date)],
+      ['Branch', branchName(inv.branchId)]
+    ];
+    if (d.st) meta.push(['By', String(d.st.name)]);
+    meta.forEach(function (row) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(small);
+      ink(120, 128, 140);
+      doc.text(row[0], right - 42, metaY, { align: 'right' });
+      doc.setFont('helvetica', 'bold');
+      ink(17, 24, 39);
+      doc.text(String(row[1]), right, metaY, { align: 'right' });
+      metaY += small * 0.52 + 1.3;
+    });
+
+    y = Math.max(y, metaY) + 1.5;
+    rule(y);
+    y += 5;
+
+    /* ------------------------------------------------------------- bill to */
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(small);
+    ink(120, 128, 140);
+    doc.text(inv.isEstimate ? 'QUOTE FOR' : 'BILL TO', m, y);
+    y += small * 0.52 + 1.4;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(body);
+    ink(17, 24, 39);
+    doc.text(String(d.c ? d.c.name : 'Walk-in customer'), m, y);
+    y += body * 0.46 + 1.2;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(small);
+    ink(75, 85, 99);
+    var who = [];
+    if (d.c) {
+      if (d.c.phone) who.push('Phone ' + d.c.phone);
+      if (d.c.gstin) who.push('GSTIN ' + d.c.gstin);
+      if (d.c.address) who.push(String(d.c.address));
+    }
+    if (!who.length) who.push('No phone or address saved');
+    who.forEach(function (t) {
+      doc.splitTextToSize(String(t), right - m).forEach(function (ln) { doc.text(ln, m, y); y += small * 0.52 + 1.1; });
+    });
+
+    /* status chip on the right */
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(small);
+    ink(d.status.cls === 'paid' ? 16 : d.status.cls === 'part' ? 180 : 190,
+        d.status.cls === 'paid' ? 122 : d.status.cls === 'part' ? 120 : 30,
+        d.status.cls === 'paid' ? 87 : 20);
+    doc.text(String(d.status.txt), right, y - (who.length * (small * 0.52 + 1.1)) - body * 0.46 - 1.2 + (who.length ? 0 : 0), { align: 'right' });
+
+    y += 3;
+    rule(y, true);
+    y += 2;
+
+    /* --------------------------------------------------------------- table */
+    var cols = a5
+      ? { idx: 8, item: 0, qty: 16, rate: 26, amt: 30 }
+      : { idx: 9, item: 0, qty: 18, rate: 30, amt: 34 };
+    var xAmt = right - cols.amt;
+    var xRate = xAmt - cols.rate;
+    var xQty = xRate - cols.qty;
+    var xIdx = m;
+    var xItem = xIdx + cols.idx + 2;
+    var itemW = xQty - xItem - 2;
+
+    var tableHead = function () {
+      doc.setFillColor(244, 246, 249);
+      doc.rect(m, y - 3.6, right - m, 6.4, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(small);
+      ink(90, 100, 115);
+      doc.text('#', xIdx + 1, y);
+      doc.text('ITEM', xItem, y);
+      doc.text('QTY', xQty + cols.qty - 2, y, { align: 'right' });
+      doc.text('RATE', xRate + cols.rate - 2, y, { align: 'right' });
+      doc.text('AMOUNT', xAmt + cols.amt, y, { align: 'right' });
+      y += 5;
+      rule(y - 1.4, true);
+    };
+    tableHead();
+
+    var showDesc = s.printDescription !== false;
+    (inv.lines || []).forEach(function (l, n) {
+      var ls = r2((Number(l.qty) || 0) * (Number(l.price) || 0));
+      var ld = Math.min(ls, Math.max(0, r2(Number(l.disc) || 0)));
+      var la = r2(ls - ld);
+      var bits = [];
+      if (showDesc && l.desc) bits.push(String(l.desc));
+      if (l.imei) bits.push('IMEI ' + l.imei);
+      if (l.serial) bits.push('S/N ' + l.serial);
+      if (ld > 0) bits.push('Item discount ' + pdfMoney(ld));
+      var nameLines = doc.splitTextToSize(String(l.name || ''), itemW);
+      var bitLines = [];
+      bits.forEach(function (b) {
+        doc.setFontSize(small - 0.6);
+        bitLines = bitLines.concat(doc.splitTextToSize(b, itemW));
+      });
+      var rowH = nameLines.length * (body * 0.46 + 1.1) + bitLines.length * (small * 0.5 + 0.9) + 2.4;
+      if (y + rowH > H - m - 24) { doc.addPage(); y = m; tableHead(); }
+      var firstY = y;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(small);
+      ink(120, 128, 140);
+      doc.text(String(n + 1), xIdx + 1, firstY);
+      doc.setFontSize(body);
+      ink(17, 24, 39);
+      nameLines.forEach(function (ln) { doc.text(ln, xItem, y); y += body * 0.46 + 1.1; });
+      if (bitLines.length) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(small - 0.6);
+        ink(120, 128, 140);
+        bitLines.forEach(function (ln) { doc.text(ln, xItem, y); y += small * 0.5 + 0.9; });
+      }
+      var lineY = firstY; /* the numbers ride the first line of the row */
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(small + 0.4);
+      ink(17, 24, 39);
+      doc.text(pdfQty(l.qty), xQty + cols.qty - 2, lineY, { align: 'right' });
+      doc.text(pdfMoney(l.price), xRate + cols.rate - 2, lineY, { align: 'right' });
+      doc.setFont('helvetica', 'bold');
+      doc.text(pdfMoney(la), xAmt + cols.amt, lineY, { align: 'right' });
+      y += 1.6;
+      rule(y - 0.8, true);
+      y += 1;
+    });
+    y += 2;
+
+    /* -------------------------------------------------------------- totals */
+    var paidNow = Number(inv.paid) || 0;
+    if (!(paidNow > 0) && d.pays.length) {
+      paidNow = r2(d.pays.reduce(function (a, x) { return a + (Number(x.amount) || 0); }, 0));
+    }
+    var rows = [['Sub total', pdfMoney(d.t.subtotal)]];
+    if ((Number(d.lineDisc) || 0) > 0) rows.push(['Item discounts', '- ' + pdfMoney(d.lineDisc)]);
+    if ((Number(d.billDisc) || 0) > 0) rows.push(['Bill discount', '- ' + pdfMoney(d.billDisc)]);
+    if (s.printTaxDetails !== false && Number(inv.taxRate)) rows.push(['Tax ' + num(inv.taxRate) + '%', pdfMoney(d.t.tax)]);
+    d.charges.forEach(function (ch) { rows.push([String(ch.name), pdfMoney(ch.amount)]); });
+    if (d.t.roundOff) rows.push(['Round off', (d.t.roundOff > 0 ? '+ ' : '- ') + pdfMoney(Math.abs(d.t.roundOff))]);
+    var showPaid = s.printReceived !== false;
+    if (showPaid) {
+      d.pays.forEach(function (p) { rows.push([String(p.method || 'Paid'), pdfMoney(p.amount)]); });
+      if (paidNow > 0.009) rows.push(['Received', pdfMoney(paidNow)]);
+      if (!inv.isEstimate) rows.push(['Balance due', pdfMoney(d.due)]);
+    }
+
+    var boxW = a5 ? 72 : 80;
+    var boxX = right - boxW;
+    var step = small * 0.52 + 2.6;
+    var need = rows.length * step + 14;
+    ensure(need);
+    var blockTop = y;
+    var ty = blockTop;
+    rows.forEach(function (r) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(small);
+      ink(75, 85, 99);
+      doc.text(String(r[0]), boxX, ty);
+      doc.setFont('helvetica', 'bold');
+      ink(17, 24, 39);
+      doc.text(String(r[1]), right, ty, { align: 'right' });
+      ty += step;
+    });
+    ty += 1;
+    doc.setFillColor(17, 24, 39);
+    doc.rect(boxX - 3, ty - 4.2, boxW + 3, 8.6, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(body + 1);
+    doc.text('TOTAL', boxX, ty + 1.6);
+    doc.text(pdfMoney(d.t.total), right - 1.5, ty + 1.6, { align: 'right' });
+    var blockBottom = ty + 9;
+
+    /* the left column carries the words, the bank details and the terms, so a
+       normal bill stays on one sheet instead of pushing a half-empty page */
+    var leftW = boxX - m - 8;
+    var lh = a5 ? small * 0.52 + 0.7 : small * 0.52 + 1.3;
+    var lf = a5 ? small - 1.2 : small;
+    var ly = blockTop;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(lf);
+    ink(75, 85, 99);
+    var words = doc.splitTextToSize((inv.isEstimate ? 'Quoted: ' : 'Amount in words: ') +
+      amountInWords(d.t.total, s.amountWordsFormat || 'indian'), leftW);
+    words.forEach(function (ln) { doc.text(ln, m, ly); ly += lh; });
+
+    var section = function (title, list, bullet) {
+      if (!list.length) return;
+      ly += a5 ? 2.4 : 3.5;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(lf);
+      ink(90, 100, 115);
+      doc.text(title, m, ly);
+      ly += lh + 0.6;
+      doc.setFont('helvetica', 'normal');
+      ink(75, 85, 99);
+      list.forEach(function (t) {
+        doc.splitTextToSize((bullet || '') + String(t), leftW).forEach(function (ln) {
+          if (ly > H - m - 4) return;
+          doc.text(ln, m, ly);
+          ly += lh;
+        });
+      });
+    };
+    /* an 80mm-wide page has no room for one line per bank field, so A5 keeps it
+       as one wrapped sentence */
+    if (!inv.isEstimate && s.showBankOnInvoice !== false) {
+      section('PAYMENT DETAILS', a5 ? [d.bank.join(' · ')] : d.bank);
+    }
+    section('TERMS', a5 ? [d.terms.slice(0, 4).join(' · ')] : d.terms.slice(0, 6), a5 ? '' : '• ');
+
+    y = Math.max(blockBottom, ly) + 4;
+
+    /* signature: sit it near the foot of the page, and let it go rather than
+       spilling a whole second sheet for one line */
+    if (y <= H - m - 12) {
+      var sigY = Math.max(y + 6, H - m - 15);
+      doc.setDrawColor(205, 210, 216);
+      doc.setLineWidth(0.2);
+      doc.line(right - 48, sigY + 8, right, sigY + 8);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(small);
+      ink(120, 128, 140);
+      doc.text('For ' + String(s.business || ''), right, sigY + 12.5, { align: 'right' });
+    }
+
+    var pages = doc.internal.getNumberOfPages();
+    for (var p = 1; p <= pages; p++) {
+      doc.setPage(p);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(small - 1.2);
+      ink(150, 158, 170);
+      doc.text(billLayoutName(st) + ' · ' + String(inv.no) + ' · page ' + p + ' of ' + pages, m, H - 5);
+      doc.text(String(s.business || ''), right, H - 5, { align: 'right' });
+    }
+    return doc;
+  }
 
   function buildDocCanvas(inv, style) {
     return ensureHtml2Canvas().then(function () {
@@ -7434,8 +8058,18 @@
   }
 
   function buildBillPdf(inv, style) {
-    return Promise.all([ensureJsPdf(), buildDocCanvas(inv, style)]).then(function (res) {
-      return pdfFromCanvas(res[1], style);
+    var st = billStyle(style);
+    /* A5, GST and Modern are real text pages; only the 80mm receipt is a picture */
+    if (st !== 'receipt') {
+      return ensureJsPdf().then(function () {
+        var textDoc = null;
+        try { textDoc = buildTextPdf(inv, st); } catch (e) { textDoc = null; }
+        if (textDoc) return textDoc;
+        return buildDocCanvas(inv, st).then(function (canvas) { return pdfFromCanvas(canvas, st); });
+      });
+    }
+    return Promise.all([ensureJsPdf(), buildDocCanvas(inv, st)]).then(function (res) {
+      return pdfFromCanvas(res[1], st);
     });
   }
 
@@ -7460,13 +8094,25 @@
     if (!canDeleteEntry(kind)) { toast('You do not have permission to delete this'); return null; }
     var snapshot = JSON.stringify(db);
     var label = 'Deleted';
+    /* keep what is being removed so the bin can hand it back for 7 days */
+    var DEL_ARRAYS = { invoice: 'invoices', item: 'items', customer: 'customers', supplier: 'suppliers',
+      expense: 'expenses', purchase: 'purchases', damage: 'damages', transfer: 'transfers', complaint: 'complaints' };
+    var delArr = DEL_ARRAYS[kind];
+    var delRec = delArr ? JSON.parse(JSON.stringify(((db[delArr] || []).filter(function (x) { return x.id === id; })[0]) || null)) : null;
+    var delInfo = deleteEntryInfo(kind, id) || { name: label, sub: '' };
+    var stockBack = [];
+    /* every stock move the delete makes is recorded, so a restore can undo it */
+    var moveStock = function (it, br, qty) {
+      S.addStock(it, br, qty);
+      stockBack.push({ itemId: it.id, branchId: br, qty: r2(qty) });
+    };
 
     if (kind === 'invoice') {
       var inv = db.invoices.filter(function (x) { return x.id === id; })[0];
       if (!inv) return null;
       (inv.lines || []).forEach(function (l) {
         var it = itemById(l.itemId);
-        if (it) S.addStock(it, inv.branchId, Number(l.qty) || 0);
+        if (it) moveStock(it, inv.branchId, Number(l.qty) || 0);
       });
       db.invoices = db.invoices.filter(function (x) { return x.id !== id; });
       logActivity('Deleted bill ' + inv.no + ' (' + money(inv.total) + ')', 'delete');
@@ -7480,7 +8126,9 @@
           var pit = itemById(l.itemId);
           if (!pit || !pit.stock) return;
           Object.keys(l.alloc || {}).forEach(function (b) {
-            pit.stock[b] = Math.max(0, r2((Number(pit.stock[b]) || 0) - (Number(l.alloc[b]) || 0)));
+            var took = Number(l.alloc[b]) || 0;
+            pit.stock[b] = Math.max(0, r2((Number(pit.stock[b]) || 0) - took));
+            if (took) stockBack.push({ itemId: pit.id, branchId: b, qty: -r2(took) });
           });
         });
       }
@@ -7537,7 +8185,7 @@
         var dit = itemById(dmg.itemId);
         /* only give stock back when this entry actually took stock out */
         var dback = (dmg.stockMoved != null) ? -(Number(dmg.stockMoved) || 0) : 0;
-        if (dit && dback) S.addStock(dit, dmg.branchId, dback);
+        if (dit && dback) moveStock(dit, dmg.branchId, dback);
       }
       db.damages = db.damages.filter(function (x) { return x.id !== id; });
       logActivity('Deleted damage entry ' + (dmg.name || ''), 'delete');
@@ -7550,8 +8198,9 @@
         (tr.lines || []).forEach(function (l) {
           var tit = itemById(l.itemId);
           if (!tit || !tit.stock) return;
-          S.addStock(tit, tr.from, Number(l.qty) || 0);
+          moveStock(tit, tr.from, Number(l.qty) || 0);
           tit.stock[tr.to] = Math.max(0, r2((Number(tit.stock[tr.to]) || 0) - (Number(l.qty) || 0)));
+          stockBack.push({ itemId: tit.id, branchId: tr.to, qty: -r2(Number(l.qty) || 0) });
         });
       }
       db.transfers = db.transfers.filter(function (x) { return x.id !== id; });
@@ -7569,6 +8218,9 @@
       return null;
     }
 
+    if (delRec && delArr) {
+      trashAdd({ kind: kind, recId: id, name: delInfo.name || label, sub: delInfo.sub || '', rec: delRec, stockBack: stockBack });
+    }
     return { label: label, undo: { label: 'Restored', run: function () {
       db = S.importData(JSON.parse(snapshot));
       ui.branch = startBranchId();
@@ -8463,7 +9115,18 @@
       if (action === 'item-cat-add') toast('Category “' + catName + '” added');
       return;
     }
+    if (action === 'global-search') { return openGlobalSearch(); }
     if (action === 'item-name-open') { ui.itemMore = ''; return itemModal(id); }
+    if (action === 'gsearch-bill') { closeModal(); return openBillPreview(invById(id)); }
+    if (action === 'gsearch-item') { closeModal(); return itemModal(id); }
+    if (action === 'gsearch-customer') {
+      closeModal();
+      ui.custMore = id || '';
+      ui.tab = 'customers';
+      render();
+      return;
+    }
+
     if (action === 'item-edit') { ui.itemMore = ''; return itemModal(id); }
     if (action === 'item-del') {
       ui.itemMore = '';
@@ -8704,6 +9367,30 @@
       } catch (e) {
         return toast('Select the box and copy it by hand');
       }
+    }
+    if (action === 'snapshot-now') {
+      if (!captureDailySnapshot(true)) return toast('Could not save a copy — browser storage is full');
+      snapDayDone = today();
+      render();
+      return toast('Copy of today saved');
+    }
+    if (action === 'restore-yesterday') {
+      if (!S.isOwner()) return toast('Only the owner can restore a copy');
+      var old = snapshots().filter(function (x) { return x.day < today(); });
+      var pick = old[old.length - 1];
+      if (!pick) return toast('There is no earlier copy yet');
+      if (!confirm('Bring everything back to how it was on ' + fmtDate(pick.day) + '?\n\nBills, stock, parties and expenses saved after that day are replaced by that copy. Staff and shop settings stay as they are now.')) return;
+      try {
+        db = S.importData(JSON.parse(pick.data));
+      } catch (e) { return toast('That copy could not be read'); }
+      ui.branch = startBranchId(); newBill(); render();
+      save();
+      return toast('Restored the copy from ' + fmtDate(pick.day));
+    }
+    if (action === 'trash-restore') { return trashRestore(id); }
+    if (action === 'trash-empty') {
+      if (!confirm('Throw away everything in the bin? It cannot come back after this.')) return;
+      return trashEmpty();
     }
     if (action === 'backup') {
       var blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' });
@@ -9117,7 +9804,8 @@
       var uname = String(data.username || '').trim();
       var pass = String(data.password || '');
       var sname = String(data.name || '').trim();
-      if (!sname || !uname || !pass) return toast('Name, user ID and password are required');
+      if (!sname || !uname) return toast('Name and user ID are required');
+      if (!data.id && !pass) return toast('Choose a password for this login');
       var clash = db.staff.filter(function (s) {
         return s.username.toLowerCase() === uname.toLowerCase() && s.id !== data.id;
       })[0];
@@ -9133,7 +9821,7 @@
       var mainBranch = branchIds.indexOf(data.id ? (staffById(data.id) || {}).branchId : '') > -1
         ? staffById(data.id).branchId : branchIds[0];
       var sp = {
-        name: sname, username: uname, password: pass,
+        name: sname, username: uname,
         role: data.role || 'cashier', branchId: mainBranch, branchIds: branchIds,
         active: !!data.active, perms: perms,
         /* the ticked boxes are the whole truth from now on — without this the
@@ -9141,8 +9829,9 @@
         permsSplit: true,
         target: Math.max(0, Number(data.target) || 0)
       };
+      var targetStaff = data.id ? staffById(data.id) : null;
       if (data.id) {
-        var es = staffById(data.id);
+        var es = targetStaff;
         if (!es) return;
         if (es.role === 'owner' && sp.role !== 'owner' &&
             db.staff.filter(function (x) { return x.role === 'owner'; }).length === 1) {
@@ -9151,11 +9840,35 @@
         Object.keys(sp).forEach(function (k) { es[k] = sp[k]; });
       } else {
         sp.id = uid(); sp.created = Date.now(); db.staff.push(sp);
+        targetStaff = sp;
       }
-      save(); closeModal(); render();
-      return toast(sp.role === 'owner'
-        ? 'Saved — an owner keeps full access, use Manager or Cashier to limit this login'
-        : 'Staff saved');
+      var afterSave = function () {
+        save(); closeModal(); render();
+        return toast(sp.role === 'owner'
+          ? 'Saved — an owner keeps full access, use Manager or Cashier to limit this login'
+          : 'Staff saved');
+      };
+      if (!pass) return afterSave();
+      /* only the salted hash is stored — the typed password is never kept */
+      return S.setPassword(targetStaff, pass).then(afterSave).catch(function (err) {
+        toast(String((err && err.message) || 'Could not save the password'));
+      });
+
+    if (kind === 'force-password') {
+      var me = S.currentStaff();
+      if (!me) return toast('Sign in again');
+      var p1 = String(data.pass1 || '');
+      var p2 = String(data.pass2 || '');
+      if (p1.length < 4) return toast('Use at least 4 characters');
+      if (p1 !== p2) return toast('The two passwords do not match');
+      if (p1 === '1234') return toast('1234 is the factory code — pick something else');
+      return S.setPassword(me, p1).then(function () {
+        save(); closeModal(); render();
+        toast('Password saved');
+      }).catch(function (err) {
+        toast(String((err && err.message) || 'Could not save the password'));
+      });
+    }
     }
 
     if (kind === 'branch') {
@@ -9507,19 +10220,26 @@
       return render();
     }
 
-    if (kind === 'linedetails') {
-      var li = Number(data.idx);
-      if (ui.bill && ui.bill.lines[li]) {
-        ui.bill.lines[li].desc = String(data.desc || '').trim();
-        ui.bill.lines[li].imei = String(data.imei || '').trim();
-        ui.bill.lines[li].serial = String(data.serial || '').trim();
-        if (data.qty != null && data.qty !== '') ui.bill.lines[li].qty = Math.max(1, Math.floor(Number(data.qty) || 1));
-        var gross = r2(ui.bill.lines[li].qty * (Number(ui.bill.lines[li].price) || 0));
-        ui.bill.lines[li].disc = r2(Math.min(gross, Math.max(0, Number(data.disc) || 0)));
-        syncPayments();
+        if (kind === 'linedetails') {
+      var idx = Number(data.idx);
+      if (!ui.bill || !ui.bill.lines[idx]) return closeModal();
+      var nq = Math.max(1, Number(data.qty) || 1);
+      var ndisc = Math.max(0, r2(Number(data.disc) || 0));
+      var ndesc = String(data.desc || '').trim();
+      var nimei = String(data.imei || '').trim();
+      var nserial = String(data.serial || '').trim();
+      if (ui.bill.kind !== 'estimate') {
+        var brId = billBranchId();
+        var next = ui.bill.lines.map(function (l, i) { return { itemId: l.itemId, qty: i === idx ? nq : l.qty }; });
+        var over = stockOverLines(next, brId);
+        if (over.length && !allowOversell(over, brId)) return;
       }
-      closeModal(); render();
-      return toast('Item updated');
+      ui.bill.lines[idx].qty = nq;
+      ui.bill.lines[idx].disc = ndisc;
+      ui.bill.lines[idx].desc = ndesc;
+      ui.bill.lines[idx].imei = nimei;
+      ui.bill.lines[idx].serial = nserial;
+      closeModal(); render(); return;
     }
 
     if (kind === 'staffentry') {
@@ -9609,6 +10329,8 @@
       is.amountGrouping = !!data.amountGrouping;
       is.amountWordsFormat = (data.amountWordsFormat === 'intl') ? 'intl' : 'indian';
       is.printYouSaved = !!data.printYouSaved;
+      is.roundOffOn = !!data.roundOffOn;
+      is.stockPolicy = data.stockPolicy === 'block' ? 'block' : 'warn';
       is.printDescription = !!data.printDescription;
       is.printTerms = !!data.printTerms;
       is.printReceivedBy = !!data.printReceivedBy;
@@ -9816,6 +10538,11 @@
     if (kind === 'item-cat') {
       var catHost2 = document.getElementById('itemCatPick');
       if (catHost2) catHost2.innerHTML = itemCatPickHTML(el.value);
+      return;
+    }
+    if (kind === 'g-search') {
+      var go = document.getElementById('gSearchOut');
+      if (go) go.innerHTML = globalSearchHTML(el.value);
       return;
     }
     if (kind === 'item-name') {
@@ -10081,6 +10808,7 @@
 
   function boot() {
     db = S.load();
+    if (db && db.settings) { try { snapDayDone = captureDailySnapshot() ? today() : today(); } catch (e) {} }
     var ap = (db.settings && db.settings.appearance) || {};
     var mode = ap.mode || S.getTheme() || 'light';
     var color = ap.color || 'red';
@@ -10165,9 +10893,33 @@
       });
       submit(f.getAttribute('data-form'), data);
     });
-    document.addEventListener('keydown', function (e) {
+        document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape') closeSidebar();
+      if (e.key === 'F2') {
+        if (ui.view === 'bill' && ui.bill && ui.bill.lines && ui.bill.lines.length) {
+          e.preventDefault();
+          lineDetailsModal(ui.bill.lines.length - 1);
+        }
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && String(e.key || '').toLowerCase() === 'k') {
+        e.preventDefault();
+        openGlobalSearch();
+        return;
+      }
       if (e.key === 'Enter' && e.target && e.target.getAttribute) {
+        if (e.target.getAttribute('data-input') === 'item-name') {
+          var nmHost = document.getElementById('itemNamePick');
+          if (nmHost) {
+            var openBtn = nmHost.querySelector('[data-act="item-name-open"]');
+            if (openBtn) {
+              e.preventDefault();
+              var oid = openBtn.getAttribute('data-id');
+              if (oid) itemModal(oid);
+              return;
+            }
+          }
+        }
         if (e.target.getAttribute('data-input') === 'p-search') {
           e.preventDefault();
           pPickFirst();
@@ -10186,7 +10938,6 @@
         }
       }
     });
-
     if (S.currentStaff()) {
       $('#login').hidden = true;
       $('#app').style.display = '';

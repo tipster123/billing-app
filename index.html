@@ -11,8 +11,8 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Billing">
-<link rel="stylesheet" href="styles.css?v=bill-purch138">
-<link rel="stylesheet" href="redesign.css?v=bill-purch138">
+<link rel="stylesheet" href="styles.css?v=bill-purch139">
+<link rel="stylesheet" href="redesign.css?v=bill-purch139">
 </head>
 <body>
 <div class="app" id="app">
@@ -43,6 +43,10 @@
       <h1 id="pageTitle">Dashboard</h1>
       <span class="top-branch" id="topBranch" title="Active branch"></span>
       <div class="grow"></div>
+
+      <button class="icon-btn" id="globalSearchBtn" type="button" aria-label="Search" title="Search bills, customers, items" data-act="global-search">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      </button>
 
       <div class="who" id="whoChip" title="Signed in">
         <span class="av" id="whoAv">O</span>
@@ -106,7 +110,7 @@
 
 <script src="qrcode.min.js"></script>
 <script src="store.js"></script>
-<script src="app.js?v=bill-purch138"></script>
+<script src="app.js?v=bill-purch139"></script>
 <script>
   /* Offline support: the whole app is saved on this device, so it opens without internet. */
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
