@@ -1458,9 +1458,11 @@ html[data-theme="dark"] .bp-status.due{color:#fb923c}
 .bp-layout{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);font-weight:600}
 .bp-layout span{text-transform:uppercase;letter-spacing:.04em;font-size:10.5px}
 .bp-layout .inp{height:34px;padding:4px 8px;font-size:13px;min-width:220px;max-width:320px}
+.bp-share-as{flex:0 0 auto;white-space:nowrap}
+.bp-share-as .inp{min-width:180px;max-width:260px}
 .bp-actions{display:flex;flex-direction:column;gap:8px;padding-top:2px;border-top:1px solid var(--line-soft)}
 .bp-group{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.bp-group.bp-primary .btn{min-width:120px}
+.bp-group.bp-primary .btn{min-width:112px;flex:0 1 auto}
 .bp-group.bp-manage{padding-top:2px}
 .bp .bill-preview{max-height:56vh;border-radius:12px}
 @media (max-width:560px){

@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v139';
+  var APP_VERSION = 'v140';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -2482,29 +2482,25 @@
             <div class="bp-status warn">Estimate · no stock moved</div>
           </div>
         </div>
-        <div class="bp-toolbar">
-          <label class="bp-layout">
-            <span>Layout</span>
-            <select class="inp" id="billLayoutSel" data-change="pdf-style" data-id="${e.id}" aria-label="Estimate layout">
-              ${BILL_LAYOUTS.map(function (l) {
-                return `<option value="${l.id}"${l.id === st ? ' selected' : ''}>${l.name}</option>`;
-              }).join('')}
-            </select>
-          </label>
-        </div>
         <div class="bill-preview" data-paper="${billPaper(st)}">
           <div class="paper-fit">
             <div class="paper"><div class="inv">${billDocHTML(estAsDoc(e), st)}</div></div>
           </div>
         </div>
         <div class="bp-actions">
-          <div class="bp-main-actions">
+          <div class="bp-group bp-primary">
+            <label class="bp-layout bp-share-as">
+              <span>Share as</span>
+              <select class="inp" id="billLayoutSel" data-change="pdf-style" data-id="${e.id}" aria-label="PDF layout to share">
+                ${BILL_LAYOUTS.map(function (l) {
+                  return `<option value="${l.id}"${l.id === st ? ' selected' : ''}>${l.name}</option>`;
+                }).join('')}
+              </select>
+            </label>
             <button class="btn primary" data-act="pdf-share" data-id="${e.id}">Share PDF</button>
-            <div class="bp-row">
-              <button class="btn" data-act="pdf-download" data-id="${e.id}">Download</button>
-              <button class="btn" data-act="pdf-print" data-id="${e.id}">Print</button>
-              <button class="btn" data-act="pdf-wa" data-id="${e.id}">WhatsApp</button>
-            </div>
+            <button class="btn" data-act="pdf-download" data-id="${e.id}">Download</button>
+            <button class="btn" data-act="pdf-print" data-id="${e.id}">Print</button>
+            <button class="btn" data-act="pdf-wa" data-id="${e.id}">WhatsApp</button>
           </div>
           <div class="bp-section bp-manage">
             <button class="btn sm primary-soft" data-act="est-to-bill" data-id="${e.id}">Convert to bill</button>
@@ -8375,29 +8371,25 @@
             <div class="bp-status ${statusCls}">${statusTxt}${!paid ? ' · ' + money(due) : ''}</div>
           </div>
         </div>
-        <div class="bp-toolbar">
-          <label class="bp-layout">
-            <span>Layout</span>
-            <select class="inp" id="billLayoutSel" data-change="pdf-style" data-id="${inv.id}" aria-label="Bill layout">
-              ${BILL_LAYOUTS.map(function (l) {
-                return `<option value="${l.id}"${l.id === st ? ' selected' : ''}>${l.name}</option>`;
-              }).join('')}
-            </select>
-          </label>
-        </div>
         <div class="bill-preview" data-paper="${billPaper(st)}">
           <div class="paper-fit">
             <div class="paper"><div class="inv">${billDocHTML(inv, st)}</div></div>
           </div>
         </div>
         <div class="bp-actions">
-          <div class="bp-main-actions">
+          <div class="bp-group bp-primary">
+            <label class="bp-layout bp-share-as">
+              <span>Share as</span>
+              <select class="inp" id="billLayoutSel" data-change="pdf-style" data-id="${inv.id}" aria-label="PDF layout to share">
+                ${BILL_LAYOUTS.map(function (l) {
+                  return `<option value="${l.id}"${l.id === st ? ' selected' : ''}>${l.name}</option>`;
+                }).join('')}
+              </select>
+            </label>
             <button class="btn primary" data-act="pdf-share" data-id="${inv.id}">Share PDF</button>
-            <div class="bp-row">
-              <button class="btn" data-act="pdf-download" data-id="${inv.id}">Download</button>
-              <button class="btn" data-act="pdf-print" data-id="${inv.id}">Print</button>
-              <button class="btn" data-act="pdf-wa" data-id="${inv.id}">WhatsApp</button>
-            </div>
+            <button class="btn" data-act="pdf-download" data-id="${inv.id}">Download</button>
+            <button class="btn" data-act="pdf-print" data-id="${inv.id}">Print</button>
+            <button class="btn" data-act="pdf-wa" data-id="${inv.id}">WhatsApp</button>
           </div>
           ${!paid ? `<div class="bp-section">
             <button class="btn sm" data-act="inv-pay-record" data-id="${inv.id}">Record payment</button>
