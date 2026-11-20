@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v142';
+  var APP_VERSION = 'v143';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -4231,12 +4231,46 @@
       </div></form>`);
   }
 
+  /* While a supplier name is typed, show the suppliers that already exist
+     under a similar name, phone or email, so the same business is not added
+     twice. Mirrors the item name picker. */
+  function supplierNamePickHTML(q, skipId) {
+    var needle = String(q == null ? '' : q).trim().toLowerCase();
+    if (needle.length < 2) return '';
+    var words = needle.split(/\s+/).filter(Boolean);
+    var digits = needle.replace(/[^0-9]/g, '');
+    var list = db.suppliers.filter(function (s) {
+      if (skipId && s.id === skipId) return false;
+      var hay = [s.name || '', s.phone || '', s.email || '', s.address || ''].join(' ').toLowerCase();
+      if (words.every(function (w) { return hay.indexOf(w) >= 0; })) return true;
+      return digits.length >= 3 && String(s.phone || '').replace(/[^0-9]/g, '').indexOf(digits) >= 0;
+    }).slice(0, 5);
+    if (!list.length) return '';
+    var exact = list.some(function (s) { return String(s.name || '').trim().toLowerCase() === needle; });
+    var head = exact
+      ? 'This supplier is already added — open it instead of adding it again.'
+      : 'Similar suppliers already exist — check them before adding a new one.';
+    return `<div class="name-pick-head">${head}</div>` + list.map(function (s) {
+      var st = supplierStats(s);
+      var meta = [s.phone || '', st.count ? st.count + (st.count === 1 ? ' purchase' : ' purchases') : 'No purchases',
+        st.due > 0.009 ? money(st.due) + ' due' : ''].filter(Boolean).join(' · ');
+      var isExact = String(s.name || '').trim().toLowerCase() === needle;
+      return `<div class="name-pick-row${isExact ? ' exact' : ''}">
+        <span class="grow"><span class="nm">${esc(s.name)}</span><span class="sub">${esc(meta)}</span></span>
+        <button type="button" class="btn sm ghost" data-act="supplier-name-open" data-id="${s.id}">Open</button>
+      </div>`;
+    }).join('');
+  }
+
   function supplierModal(id, prefill) {
     var s = id ? supplierById(id) : null;
     var preName = (!s && prefill && prefill.name) ? prefill.name : '';
     openModal(s ? 'Edit supplier' : 'Add supplier', `<form data-form="supplier">
       <input type="hidden" name="id" value="${s ? s.id : ''}">
-      <div class="field"><label>Supplier name</label><input class="inp" name="name" required value="${esc(s ? s.name : preName)}"></div>
+      <div class="field"><label>Supplier name</label>
+        <input class="inp" name="name" required autocomplete="off" data-input="sup-name" value="${esc(s ? s.name : preName)}">
+        <div class="name-pick" id="supNamePick">${preName ? supplierNamePickHTML(preName, '') : ''}</div>
+      </div>
       <div class="grid2">
         <div class="field"><label>Phone</label><input class="inp" name="phone" value="${esc(s ? s.phone : '')}"></div>
         <div class="field"><label>Email</label><input class="inp" type="email" name="email" value="${esc(s ? s.email : '')}"></div>
@@ -9125,6 +9159,7 @@
     }
     if (action === 'global-search') { return openGlobalSearch(); }
     if (action === 'item-name-open') { ui.itemMore = ''; return itemModal(id); }
+    if (action === 'supplier-name-open') { return supplierModal(id); }
     if (action === 'gsearch-bill') { closeModal(); return openBillPreview(invById(id)); }
     if (action === 'gsearch-item') { closeModal(); return itemModal(id); }
     if (action === 'gsearch-customer') {
@@ -10560,6 +10595,13 @@
       nmHost.innerHTML = itemNamePickHTML(el.value, idField ? idField.value : '');
       return;
     }
+    if (kind === 'sup-name') {
+      var supHost = document.getElementById('supNamePick');
+      if (!supHost) return;
+      var supIdField = document.querySelector('form[data-form="supplier"] input[name="id"]');
+      supHost.innerHTML = supplierNamePickHTML(el.value, supIdField ? supIdField.value : '');
+      return;
+    }
     if (kind === 'p-inv-no') { if (pDraft) pDraft.invoiceNo = el.value; return; }
     if (kind === 'p-note') { if (pDraft) pDraft.note = el.value; return; }
     if (kind === 'discount') {
@@ -10916,6 +10958,18 @@
         return;
       }
       if (e.key === 'Enter' && e.target && e.target.getAttribute) {
+        if (e.target.getAttribute('data-input') === 'sup-name') {
+          var supEnter = document.getElementById('supNamePick');
+          if (supEnter) {
+            var supOpenBtn = supEnter.querySelector('[data-act="supplier-name-open"]');
+            if (supOpenBtn) {
+              e.preventDefault();
+              var supOpenId = supOpenBtn.getAttribute('data-id');
+              if (supOpenId) supplierModal(supOpenId);
+              return;
+            }
+          }
+        }
         if (e.target.getAttribute('data-input') === 'item-name') {
           var nmHost = document.getElementById('itemNamePick');
           if (nmHost) {
