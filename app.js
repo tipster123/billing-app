@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v140';
+  var APP_VERSION = 'v141';
   var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
 
   var db = null;
@@ -2497,7 +2497,7 @@
                 }).join('')}
               </select>
             </label>
-            <button class="btn primary" data-act="pdf-share" data-id="${e.id}">Share PDF</button>
+            <button class="btn primary" data-act="pdf-share" data-id="${e.id}">Share PDF · ${billShortName(st)}</button>
             <button class="btn" data-act="pdf-download" data-id="${e.id}">Download</button>
             <button class="btn" data-act="pdf-print" data-id="${e.id}">Print</button>
             <button class="btn" data-act="pdf-wa" data-id="${e.id}">WhatsApp</button>
@@ -7083,6 +7083,15 @@
     for (var i = 0; i < BILL_LAYOUTS.length; i++) if (BILL_LAYOUTS[i].id === id) return BILL_LAYOUTS[i].name;
     return 'Sales invoice (A5 landscape)';
   }
+  /* short page name shown on the Share PDF button, so the button always says
+     which page it will send */
+  function billShortName(style) {
+    var id = billStyle(style);
+    if (id === 'a5') return 'A5';
+    if (id === 'receipt') return '80 mm';
+    if (id === 'gst') return 'A4 tax';
+    return 'A4';
+  }
   function billPdfName(inv, style) {
     var c = findCust(inv.customerId);
     var base = pdfSafeName((c ? c.name : 'Walk-in customer') + ' - ' + inv.no + ' - ' + inv.date);
@@ -8386,7 +8395,7 @@
                 }).join('')}
               </select>
             </label>
-            <button class="btn primary" data-act="pdf-share" data-id="${inv.id}">Share PDF</button>
+            <button class="btn primary" data-act="pdf-share" data-id="${inv.id}">Share PDF · ${billShortName(st)}</button>
             <button class="btn" data-act="pdf-download" data-id="${inv.id}">Download</button>
             <button class="btn" data-act="pdf-print" data-id="${inv.id}">Print</button>
             <button class="btn" data-act="pdf-wa" data-id="${inv.id}">WhatsApp</button>
@@ -8769,6 +8778,12 @@
     if (action === 'bill-save-cancel') return billSaveCancel();
     if (action === 'bill-save-edit') return billSaveEdit();
     if (action === 'bill-save-yes') { closeModal(); return saveBill(el.getAttribute('data-mode')); }
+    if (action === 'pdf-share' || action === 'pdf-wa' || action === 'pdf-download' || action === 'pdf-print') {
+      /* the picker next to the buttons is the truth: take the layout straight
+         from it, so a share can never fall back to another page */
+      var pdfSel = document.getElementById('billLayoutSel');
+      if (pdfSel) { ui.previewStyle = billStyle(pdfSel.value); ui.pdf = null; }
+    }
     if (action === 'pdf-share') return sharePdf(id, ui.previewStyle);
     if (action === 'pdf-wa') return shareWhatsApp(id, ui.previewStyle);
     if (action === 'pdf-download') return downloadPdf(id, ui.previewStyle);
