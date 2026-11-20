@@ -154,9 +154,9 @@ window.Store = (function () {
         },
         appearance: { mode: 'light', color: 'red' },
         cloud: {
-          url: 'https://rkdrivwtycggzoojydzf.supabase.co',
-          key: 'sb_publishable_6OpmrjyxuHFbuU-z9Xn1cQ_7nIphWto',
-          shop: 'rkdrivwtycggzoojydzf',
+          url: '',
+          key: '',
+          shop: '',
           auto: true, syncedAt: 0, lastError: ''
         }
       },
@@ -413,12 +413,14 @@ window.Store = (function () {
     ap.color = colors.indexOf(ap.color) > -1 ? ap.color : 'red';
     ps.appearance = ap;
 
-    /* cloud sync defaults — the public key is safe in the page, the shop code keeps the row private */
+    /* cloud sync defaults — never ship credentials in code; configure from Settings */
     if (!ps.cloud || typeof ps.cloud !== 'object') ps.cloud = {};
-    if (!ps.cloud.url) ps.cloud.url = 'https://rkdrivwtycggzoojydzf.supabase.co';
-    if (!ps.cloud.key) ps.cloud.key = 'sb_publishable_6OpmrjyxuHFbuU-z9Xn1cQ_7nIphWto';
-    if (!ps.cloud.shop) ps.cloud.shop = 'rkdrivwtycggzoojydzf';
+    if (ps.cloud.url == null) ps.cloud.url = '';
+    if (ps.cloud.key == null) ps.cloud.key = '';
+    if (ps.cloud.shop == null) ps.cloud.shop = '';
     if (ps.cloud.auto == null) ps.cloud.auto = true;
+    if (ps.cloud.syncedAt == null) ps.cloud.syncedAt = 0;
+    if (ps.cloud.lastError == null) ps.cloud.lastError = '';
     obj.items.forEach(function (it) {
       if (!it.stock || typeof it.stock !== 'object' || Array.isArray(it.stock)) {
         var flat = Number(it.stock) || 0;

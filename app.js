@@ -9,8 +9,8 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v143';
-  var APP_BRANCH = 'fix/stock-adjustment-and-save-errors';
+  var APP_VERSION = 'v144';
+  var APP_BRANCH = 'newfix1';
 
   var db = null;
   var ui = {
@@ -344,6 +344,22 @@
     "drop policy if exists \"app all\" on public.invoices;",
     "create policy \"app all\" on public.invoices for all to anon using (true) with check (true);",
     "",
+    "create table if not exists public.estimates (",
+    "  id text primary key,",
+    "  no text,",
+    "  date text,",
+    "  customer_id text,",
+    "  customer_name text,",
+    "  branch_id text,",
+    "  staff_id text,",
+    "  total numeric,",
+    "  data jsonb not null,",
+    "  updated_at timestamptz not null default now()",
+    ");",
+    "alter table public.estimates enable row level security;",
+    "drop policy if exists \"app all\" on public.estimates;",
+    "create policy \"app all\" on public.estimates for all to anon using (true) with check (true);",
+    "",
     "create table if not exists public.purchases (",
     "  id text primary key,",
     "  no text,",
@@ -564,6 +580,10 @@
         var due = r2(Number(i.total) - Number(i.paid));
         return { id: i.id, no: i.no || '', date: i.date || '', customer_id: i.customerId || '', customer_name: c ? c.name : 'Walk-in', branch_id: i.branchId || '', staff_id: i.staffId || '', discount: Number(i.discount) || 0, tax: Number(i.tax) || 0, total: Number(i.total) || 0, paid: Number(i.paid) || 0, status: due <= 0.009 ? 'paid' : (Number(i.paid) > 0 ? 'partial' : 'unpaid'), data: i };
       } },
+    { key: 'estimates', table: 'estimates', row: function (e) {
+        var c = findCust(e.customerId);
+        return { id: e.id, no: e.no || '', date: e.date || '', customer_id: e.customerId || '', customer_name: c ? c.name : 'Walk-in', branch_id: e.branchId || '', staff_id: e.staffId || '', total: Number(e.total) || 0, data: e };
+      } },
     { key: 'purchases', table: 'purchases', row: function (p) {
         var sup = supplierById(p.supplierId);
         return { id: p.id, no: p.no || '', date: p.date || '', supplier_id: p.supplierId || '', supplier_name: sup ? sup.name : '', status: p.status || 'approved', total: Number(p.total) || 0, branch_id: p.branchId || '', data: p };
@@ -613,7 +633,7 @@
     return {
       id: 'main', business: s.business || '', gstin: s.gstin || '', prefix: s.prefix || '',
       tax_rate: Number(s.taxRate) || 0, currency: s.currency || '',
-      data: { settings: s, counters: { counter: db.counter, tcounter: db.tcounter, pcounter: db.pcounter, rcounter: db.rcounter } }
+      data: { settings: s, counters: { counter: db.counter, tcounter: db.tcounter, pcounter: db.pcounter, rcounter: db.rcounter, ecounter: db.ecounter, ccomp: db.ccomp } }
     };
   }
   function cloudAllTables() {
@@ -684,7 +704,7 @@
   }
 
   var CLOUD_DELETE_TABLES = ['app_settings', 'branches', 'staff', 'items', 'customers', 'suppliers',
-    'invoices', 'purchases', 'sreturns', 'preturns', 'transfers', 'damages', 'complaints', 'expenses', 'staff_ledger', 'activity'];
+    'invoices', 'estimates', 'purchases', 'sreturns', 'preturns', 'transfers', 'damages', 'complaints', 'expenses', 'staff_ledger', 'activity'];
 
   function cloudWipeAll() {
     if (!cloudReady()) return Promise.resolve({ ok: false, error: 'Cloud is not set up' });
@@ -860,6 +880,8 @@
     fresh.tcounter = cnt.tcounter;
     fresh.pcounter = cnt.pcounter;
     fresh.rcounter = cnt.rcounter;
+    fresh.ecounter = cnt.ecounter;
+    fresh.ccomp = cnt.ccomp;
     db = S.importData(fresh);
     cloudEnsureUniqueNos();
     db.settings.cloud = keep;
@@ -901,7 +923,7 @@
   function cloudLocalIsFresh() {
     if (!db) return true;
     if (S.wasEmpty()) return true;
-    var moved = ['invoices', 'purchases', 'sreturns', 'preturns', 'transfers', 'expenses', 'damages']
+    var moved = ['invoices', 'estimates', 'purchases', 'sreturns', 'preturns', 'transfers', 'expenses', 'damages']
       .some(function (k) { return (db[k] || []).length > 0; });
     var people = (db.customers || []).length > 0 || (db.suppliers || []).length > 0;
     if (moved || people) return false;
@@ -11029,6 +11051,13 @@
         showLogin();
         toast('Your saved data was restored from the cloud');
       }
+    });
+  }
+
+  /* Offline support: the whole app is saved on this device, so it opens without internet. */
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js').catch(function () {});
     });
   }
 

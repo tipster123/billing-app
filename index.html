@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#f5f7fb">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://*.supabase.co; font-src 'self' data:; worker-src 'self' blob:; manifest-src 'self'; base-uri 'self'; form-action 'self'; object-src 'none'">
 <title>Billing &amp; Inventory</title>
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -11,8 +12,8 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Billing">
-<link rel="stylesheet" href="styles.css?v=bill-purch143">
-<link rel="stylesheet" href="redesign.css?v=bill-purch143">
+<link rel="stylesheet" href="styles.css?v=bill-purch144">
+<link rel="stylesheet" href="redesign.css?v=bill-purch144">
 </head>
 <body>
 <div class="app" id="app">
@@ -110,14 +111,6 @@
 
 <script src="qrcode.min.js"></script>
 <script src="store.js"></script>
-<script src="app.js?v=bill-purch143"></script>
-<script>
-  /* Offline support: the whole app is saved on this device, so it opens without internet. */
-  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
-    window.addEventListener('load', function () {
-      navigator.serviceWorker.register('sw.js').catch(function () {});
-    });
-  }
-</script>
+<script src="app.js?v=bill-purch144"></script>
 </body>
 </html>

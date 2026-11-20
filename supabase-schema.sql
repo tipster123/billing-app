@@ -104,6 +104,22 @@ alter table public.invoices enable row level security;
 drop policy if exists "app all" on public.invoices;
 create policy "app all" on public.invoices for all to anon using (true) with check (true);
 
+create table if not exists public.estimates (
+  id text primary key,
+  no text,
+  date text,
+  customer_id text,
+  customer_name text,
+  branch_id text,
+  staff_id text,
+  total numeric,
+  data jsonb not null,
+  updated_at timestamptz not null default now()
+);
+alter table public.estimates enable row level security;
+drop policy if exists "app all" on public.estimates;
+create policy "app all" on public.estimates for all to anon using (true) with check (true);
+
 create table if not exists public.purchases (
   id text primary key,
   no text,
