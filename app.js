@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v150';
+  var APP_VERSION = 'v151';
   var APP_BRANCH = 'newfix1';
 
   var db = null;
@@ -22,7 +22,7 @@
     staffOpen: '',
     itemOpen: '', itemMore: '', itemHist: 'all', itmAll: false, purchMenu: '', purchMore: 0, partyTab: 'customers', supMenu: '', supFilter: 'all',
     inv: { status: 'all', page: 1, per: 12 },
-    rep: { from: '', to: '' }, bill: null, transfer: null,
+    rep: { from: '', to: '' }, repMore: {}, bill: null, transfer: null,
     settingsTab: 'company', scCharges: null, scTerms: null, scFields: null, pdf: null, previewStyle: '',
     expLink: { q: '', ids: [] },
     bin: { q: '', kind: 'all', sort: 'new' }
@@ -2144,7 +2144,7 @@
       <div class="sale-from-cart">
         <div class="billed-header"><span class="billed-check">✓</span> Billed Items</div>
         <div class="billed-list">
-          ${lines ? b.lines.map(function (l, i) { return cartLine(l, i); }).join('')
+          ${lines ? b.lines.map(function (l, i) { return cartLine(l, i, t); }).join('')
             : '<div class="empty compact"><b>No items added</b>Add items to this sale below.</div>'}
         </div>
         <div class="billed-summary">
@@ -2256,13 +2256,34 @@
     }).join('');
   }
 
-  function cartLine(l, i) {
+  /* What this line actually earns: its price less its own discount and its
+     share of the bill discount, less the cost of the units sold. A ₹18,500 line
+     with a ₹5,500 discount sold from stock that cost ₹11,500 makes ₹1,500, not
+     ₹7,000 — the discount has to come off before the profit is counted. */
+  function lineProfitWith(l, t, cost) {
+    var qty = Number(l.qty) || 0;
+    var gross = r2(qty * (Number(l.price) || 0));
+    var ldisc = Math.min(gross, Math.max(0, r2(Number(l.disc) || 0)));
+    var base = r2(gross - ldisc);
+    if (t) {
+      var afterLine = Math.max(0, r2((t.subtotal || 0) - (t.lineDisc != null ? t.lineDisc : 0)));
+      var billDisc = (t.billDisc != null ? t.billDisc : (t.discount || 0));
+      if (afterLine > 0 && billDisc > 0) base = r2(base - billDisc * base / afterLine);
+    }
+    return r2(base - qty * (Number(cost) || 0));
+  }
+  function lineProfit(l, t) { return lineProfitWith(l, t, l.cost); }
+
+  function cartLine(l, i, t) {
     var details = [];
     if (l.batchNo) details.push(esc(l.batchNo));
     if (l.desc) details.push(esc(l.desc));
     if (l.imei) details.push('IMEI: ' + esc(l.imei));
     if (l.serial) details.push('Serial: ' + esc(l.serial));
-    if (can('profit.view') && Number(l.cost) > 0) details.push('Profit ' + money(r2((Number(l.price) || 0) - (Number(l.cost) || 0))));
+    if (can('profit.view') && Number(l.cost) > 0) {
+      var lp = lineProfit(l, t);
+      details.push('Profit ' + money(lp) + (lp < 0 ? ' (loss)' : ''));
+    }
     var qty = Number(l.qty) || 0;
     var price = Number(l.price) || 0;
     var gross = r2(qty * price);
@@ -2294,15 +2315,19 @@
     var batches = S.itemBatches(it);
     var showCost = can('profit.view');
     if (!batches.length) return '';
+    var bt2 = billTotals();
     var rows = batches.slice().sort(function (a, b) { return (Number(a.no) || 0) - (Number(b.no) || 0); }).map(function (bt) {
       var have = S.batchStock(bt, brId);
       var mine = (l.batchId || '') === bt.id;
       var label = bt.label || ('Batch ' + bt.no);
+      /* Profit for this line if this batch is picked, so a discount on the bill
+         shows up here too instead of only the raw price less cost. */
+      var pr = lineProfitWith(l, bt2, bt.cost);
       return `<label class="batch-row${mine ? ' sel' : ''}">
         <input type="radio" name="batchId" value="${bt.id}"${mine ? ' checked' : ''}${have > 0 ? '' : ' disabled'}>
         <span class="batch-main"><span class="batch-name">${esc(label)}</span>
           <span class="batch-meta">${have > 0 ? num(have) + ' in ' + esc(branchName(brId)) : 'No stock in ' + esc(branchName(brId))}${showCost ? ' · cost ' + money(bt.cost) : ''}${bt.purchaseNo ? ' · ' + esc(bt.purchaseNo) : ''}</span></span>
-        ${showCost ? `<span class="batch-profit">${l.price != null ? 'margin ' + money(r2((Number(l.price) || 0) - (Number(bt.cost) || 0))) : ''}</span>` : ''}
+        ${showCost ? `<span class="batch-profit">profit ${money(pr)}</span>` : ''}
       </label>`;
     }).join('');
     return `<div class="field"><label>Batch</label>
@@ -4918,10 +4943,12 @@
   }
   function trLine(l, i) {
     var it = itemById(l.itemId);
-    var max = it ? stockOf(it) + (l.qty || 0) : 0;
+    var avail = it ? stockOf(it) : 0;
+    var short = (Number(l.qty) || 0) > avail;
     return `<div class="tline"><div><div class="nm">${esc(l.name)}</div>
-      <div class="meta">max ${num(max)} from ${esc(branchName(ui.branch))}</div></div>
-      <div class="ctl"><input type="text" inputmode="decimal" min="1" step="1" data-input="tr-qty" data-id="${i}" value="${l.qty}">
+      <div class="meta">${num(avail)} available in ${esc(branchName(ui.branch))}</div>
+      <div class="meta tr-warn" id="trWarn${i}"${short ? '' : ' style="display:none"'}>Only ${num(avail)} in ${esc(branchName(ui.branch))}</div></div>
+      <div class="ctl"><input type="text" inputmode="numeric" min="1" step="1" data-input="tr-qty" data-id="${i}" value="${l.qty}">
         <button class="btn sm icon" data-act="tr-remove" data-id="${i}" aria-label="Remove">✕</button></div></div>`;
   }
 
@@ -6066,10 +6093,11 @@
       return r2((Number(l.qty) || 0) * c);
     };
 
-    var byBill = inv.map(function (i) {
+    var byBillAll = inv.map(function (i) {
       var c = findCust(i.customerId);
       return { no: i.no, date: i.date, cust: c ? c.name : 'Walk-in', linked: linkedExpenseShare(i), profit: billProfit(i) };
-    }).sort(function (a, b) { return b.profit - a.profit; }).slice(0, 10);
+    }).sort(function (a, b) { return b.profit - a.profit; });
+    var byBill = byBillAll.slice(0, moreOn('bills') ? byBillAll.length : 10);
 
     var byDay = {};
     inv.forEach(function (i) {
@@ -6094,7 +6122,8 @@
     var allItems = Object.keys(byItem).map(function (k) { return byItem[k]; });
     var top = allItems.slice().sort(function (a, b) { return b.revenue - a.revenue; }).slice(0, 6);
     var byQty = allItems.slice().sort(function (a, b) { return b.qty - a.qty; }).slice(0, 5);
-    var byProfit = allItems.slice().sort(function (a, b) { return b.profit - a.profit; }).slice(0, 5);
+    var byProfitAll = allItems.slice().sort(function (a, b) { return b.profit - a.profit; });
+    var byProfit = byProfitAll.slice(0, moreOn('items') ? byProfitAll.length : 5);
     var byItemCat = {};
     inv.forEach(function (i) {
       var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i), { roundOff: (typeof i.roundOff === 'number' ? i.roundOff : 0) });
@@ -6108,9 +6137,10 @@
         byItemCat[cat].qty += Number(l.qty) || 0;
       });
     });
-    var catRows = Object.keys(byItemCat).map(function (k) {
+    var catAll = Object.keys(byItemCat).map(function (k) {
       return { name: k, revenue: byItemCat[k].revenue, profit: byItemCat[k].profit, qty: byItemCat[k].qty };
     }).sort(function (a, b) { return b.revenue - a.revenue; });
+    var catRows = catAll.slice(0, moreOn('cats') ? catAll.length : 5);
 
     var soldIds = {};
     inv.forEach(function (i) { i.lines.forEach(function (l) { if (l.itemId) soldIds[l.itemId] = (soldIds[l.itemId] || 0) + Number(l.qty || 0); }); });
@@ -6167,6 +6197,15 @@
     var chip = function (days, label, on) {
       return '<button type="button" class="' + (on ? 'on' : '') + '" data-act="rep-range" data-days="' + days + '">' + label + '</button>';
     };
+    /* Each profit card shows the top few rows; this lets the reader open the
+       whole list without leaving the report. Function declarations so the rows
+       above can call them too. */
+    function moreOn(k) { return !!(ui.repMore && ui.repMore[k]); }
+    function moreBtn(k, total, base) {
+      if (total <= base) return '';
+      return '<div class="rep-more-wrap"><button type="button" class="btn sm linkish" data-act="rep-more" data-id="' + k + '">' +
+        (moreOn(k) ? 'Show less' : 'Show all ' + total) + '</button></div>';
+    }
 
     var strip = [
       { k: 'Sales', v: money(sales) },
@@ -6248,18 +6287,18 @@
         return row(t.name, num(t.qty) + ' in stock · ' + num(t.sold) + ' sold', money(t.value), 'bad');
       }).join(''), 'Nothing stuck — everything in stock is moving.')}
 
-      ${showProfit ? secHead('Profit by item') + list(byProfit.map(function (t) {
+      ${showProfit ? secHead('Profit by item', byProfitAll.length > 5 ? byProfitAll.length + ' items' : '') + list(byProfit.map(function (t) {
         return row(t.name, num(t.qty) + ' sold · ' + money(t.revenue), money(t.profit), t.profit < 0 ? 'bad' : 'ok');
-      }).join(''), 'No sales in this range.') : ''}
+      }).join(''), 'No sales in this range.') + moreBtn('items', byProfitAll.length, 5) : ''}
 
-      ${showProfit ? secHead('Profit by category') + list(catRows.map(function (t) {
+      ${showProfit ? secHead('Profit by category', catAll.length > 5 ? catAll.length + ' categories' : '') + list(catRows.map(function (t) {
         return row(t.name, num(t.qty) + ' sold · ' + money(t.revenue), money(t.profit), t.profit < 0 ? 'bad' : 'ok');
-      }).join(''), 'No sales in this range.') : ''}
+      }).join(''), 'No sales in this range.') + moreBtn('cats', catAll.length, 5) : ''}
 
       ${showProfit ? secHead('Profit by bill', 'after linked expenses') + list(byBill.map(function (b) {
         return row(b.no, esc(fmtDate(b.date)) + ' · ' + esc(b.cust) + (b.linked > 0.009 ? ' · expenses ' + money(b.linked) : ''),
           money(b.profit), b.profit < 0 ? 'bad' : 'ok');
-      }).join(''), 'No bills in this range.') : ''}
+      }).join(''), 'No bills in this range.') + moreBtn('bills', byBillAll.length, 10) : ''}
 
       ${secHead('Expenses by category')}
       ${list(Object.keys(byCat).sort().map(function (k) {
@@ -8881,6 +8920,11 @@
       fcPageReset(fr);
       return render();
     }
+    if (action === 'rep-more') {
+      ui.repMore = ui.repMore || {};
+      ui.repMore[id] = !ui.repMore[id];
+      return render();
+    }
     if (action === 'rep-range') {
       var rd = el && el.getAttribute('data-days');
       var back2 = function (n) {
@@ -9375,8 +9419,9 @@
       if (!tr.to) return toast('Choose a destination branch');
       for (var k = 0; k < tr.lines.length; k++) {
         var it3 = itemById(tr.lines[k].itemId);
+        if (!(Number(tr.lines[k].qty) > 0)) return toast('Enter a quantity for ' + tr.lines[k].name);
         if (!it3 || S.stockOf(it3, ui.branch) < tr.lines[k].qty) {
-          return toast('Not enough ' + tr.lines[k].name + ' in this branch');
+          return toast('Only ' + num(it3 ? S.stockOf(it3, ui.branch) : 0) + ' of ' + tr.lines[k].name + ' in ' + branchName(ui.branch));
         }
       }
       var me = S.currentStaff();
@@ -11016,10 +11061,16 @@
       var i2 = Number(el.getAttribute('data-id'));
       var line = ui.transfer.lines[i2];
       if (!line) return;
+      /* Keep what was typed and do not redraw: redrawing on every keystroke threw
+         the field (and any second digit) away, so a quantity above the stock on
+         hand could never be entered. The warning and the Send check below catch
+         an amount larger than the branch holds. */
+      line.qty = Math.max(0, Math.floor(Number(String(el.value).replace(/[^0-9]/g, '')) || 0));
       var it = itemById(line.itemId);
-      var max = S.stockOf(it, ui.branch);
-      line.qty = Math.max(1, Math.min(max, Math.floor(Number(el.value) || 1)));
-      return render();
+      var avail = it ? S.stockOf(it, ui.branch) : 0;
+      var warn = document.getElementById('trWarn' + i2);
+      if (warn) warn.style.display = line.qty > avail ? '' : 'none';
+      return;
     }
   }
 
