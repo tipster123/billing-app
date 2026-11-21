@@ -931,6 +931,17 @@
 
 /* Invoice preview modal actions */
 .bp-actions{display:flex;flex-direction:column;gap:12px;padding-top:12px;border-top:1px solid var(--line-soft)}
+
+/* Bill narration: shown in the app only, never on the printed document */
+.bp-narration{
+  display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;
+  margin:0 0 10px;padding:8px 10px;border:1px dashed var(--line-soft);border-radius:10px;
+  background:var(--surface-2,color-mix(in srgb, var(--brand) 5%, transparent));
+  font-size:12.5px;line-height:1.45;color:var(--muted)
+}
+.bp-narration b{color:var(--ink,inherit);font-weight:650;white-space:nowrap}
+.bp-narration span{flex:1 1 160px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink,inherit)}
+.bill-text{min-height:52px;resize:vertical;line-height:1.45;font-size:13.5px}
 .bp-main-actions{display:flex;flex-direction:column;gap:10px}
 .bp-main-actions > .btn.primary{
   width:100%;min-height:48px;font-size:15px;font-weight:700;border-radius:14px;

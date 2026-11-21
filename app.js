@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v148';
+  var APP_VERSION = 'v149';
   var APP_BRANCH = 'newfix1';
 
   var db = null;
@@ -1318,6 +1318,7 @@
       kind: opts.kind === 'estimate' ? 'estimate' : 'sale',
       customerId: '', date: today(), discount: 0, autoPay: true, payments: [{ method: 'Cash', amount: 0 }],
       lines: [], customerChosen: false,
+      note: '', internalNote: '',
       fields: {},
       charges: (db.settings.extraCharges || []).map(function (c) {
         return { name: c.name, amount: Number(c.amount) || 0, on: false };
@@ -1348,7 +1349,7 @@
       id: e.id, no: e.no, date: e.date, created: e.created, isEstimate: true,
       branchId: e.branchId, staffId: e.staffId || '', customerId: e.customerId || '',
       lines: e.lines || [], discount: e.discount, taxRate: e.taxRate,
-      charges: e.charges || [], fields: e.fields || [], note: '',
+      charges: e.charges || [], fields: e.fields || [], note: e.note || '', internalNote: e.internalNote || '',
       subtotal: e.subtotal, tax: e.tax, total: e.total,
       paid: 0, payments: [], emi: null, method: ''
     };
@@ -1397,7 +1398,8 @@
       editId: inv.id, editNo: inv.no, editDate: inv.date, editBranch: inv.branchId,
       customerId: inv.customerId || '', customerChosen: true,
       discount: Number(inv.discount) || 0, autoPay: false, payments: pays,
-      lines: lines, fields: fields, charges: charges
+      lines: lines, fields: fields, charges: charges,
+      note: inv.note || '', internalNote: inv.internalNote || ''
     };
     ui.tab = 'bill';
     render();
@@ -1466,10 +1468,33 @@
   }
 
 
-  function render() {
+  /* Every change rebuilds the whole view, which used to drop the page back to
+     the top and the item picker back to its first row. Remember where the user
+     was and put it back when the same page is drawn again. */
+  var lastRenderedTab = '';
+  function renderScrollSnapshot() {
+    var scroller = document.scrollingElement || document.documentElement;
+    var sheet = document.querySelector('.sheet-list');
+    return {
+      tab: lastRenderedTab,
+      y: scroller ? scroller.scrollTop : (Number(window.scrollY) || 0),
+      sheet: sheet ? sheet.scrollTop : 0
+    };
+  }
+  function renderScrollRestore(snap, opts) {
+    if (!snap || snap.tab !== ui.tab) return;
+    var scroller = document.scrollingElement || document.documentElement;
+    if (!opts.resetScroll && scroller && snap.y) scroller.scrollTop = snap.y;
+    var sheet = document.querySelector('.sheet-list');
+    if (!opts.resetSheet && sheet && snap.sheet) sheet.scrollTop = snap.sheet;
+  }
+
+  function render(opts) {
+    opts = opts || {};
     if (!S.currentStaff()) { showLogin(); return; }
     if (!tabAllowed(ui.tab)) ui.tab = firstTab();
     if (!ui.branch || !S.branchById(ui.branch)) ui.branch = startBranchId();
+    var scrollSnap = renderScrollSnapshot();
 
     var staff = S.currentStaff();
     var tab = tabDef(ui.tab);
@@ -1557,6 +1582,8 @@
     restoreFocus(focusSnap);
     try { syncCreateButtons(); } catch (e) { console.error(e); }
     syncViewportHeight();
+    lastRenderedTab = ui.tab;
+    renderScrollRestore(scrollSnap, opts);
   }
 
   function branchInvoices(b) { return db.invoices.filter(function (i) { return i.branchId === (b || ui.branch); }); }
@@ -2145,6 +2172,16 @@
       </div>` : ''}
 
       <div class="card sale-block">
+        <div class="sale-block-head">Description &amp; narration</div>
+        <div class="field"><label>Description</label>
+          <textarea class="inp bill-text" rows="2" data-input="bill-note" placeholder="Prints under the items on the bill — warranty, delivery, fittings…">${esc(b.note || '')}</textarea>
+          <div class="sub" style="margin-top:4px">Printed on the bill${db.settings.printDescription === false ? ' (printing is turned off in Page setup)' : ''}.</div></div>
+        <div class="field" style="margin-top:10px"><label>Narration</label>
+          <textarea class="inp bill-text" rows="2" data-input="bill-narration" placeholder="Internal note — why it was discounted, who approved it…">${esc(b.internalNote || '')}</textarea>
+          <div class="sub" style="margin-top:4px">Staff and owner only — never printed or shared with the customer.</div></div>
+      </div>
+
+      <div class="card sale-block">
         <div class="sale-block-head">Discount &amp; Charges</div>
         <div class="dc-row">
           <span class="dc-label">Discount</span>
@@ -2466,6 +2503,8 @@
     inv.payments = payments;
     inv.emi = emiFromPayments();
     inv.method = payments.map(function (p) { return p.method; }).filter(function (m, n, arr) { return arr.indexOf(m) === n; }).join(' + ') || 'Credit';
+    inv.note = String(b.note || '').trim();
+    inv.internalNote = String(b.internalNote || '').trim();
     inv.editedAt = Date.now();
     inv.editedBy = (S.currentStaff() || {}).name || '';
 
@@ -2575,7 +2614,8 @@
       payments: payments,
       emi: emiFromPayments(),
       method: payments.map(function (p) { return p.method; }).join(' + ') || 'Credit',
-      note: ''
+      note: String(b.note || '').trim(),
+      internalNote: String(b.internalNote || '').trim()
     };
     inv.lines.forEach(function (l) {
       var it = itemById(l.itemId);
@@ -2610,7 +2650,8 @@
         .map(function (f) { return { label: f.label, value: String((b.fields || {})[f.id] || '').trim() }; })
         .filter(function (f) { return f.value; }),
       subtotal: t.subtotal, tax: t.tax, roundOff: r2(t.roundOff || 0), total: t.total,
-      note: '', convertedAt: 0, convertedNo: ''
+      note: String(b.note || '').trim(), internalNote: String(b.internalNote || '').trim(),
+      convertedAt: 0, convertedNo: ''
     };
     db.estimates.push(est);
     logActivity('Saved estimate ' + est.no + ' for ' + (findCust(est.customerId) ? findCust(est.customerId).name : 'walk-in') + ' (' + money(est.total) + ')', 'bill');
@@ -2644,6 +2685,7 @@
             <div class="bp-status warn">Estimate · no stock moved</div>
           </div>
         </div>
+        ${e.internalNote ? `<div class="bp-narration"><b>Narration</b><span>${esc(e.internalNote)}</span></div>` : ''}
         <div class="bill-preview" data-paper="${billPaper(st)}">
           <div class="paper-fit">
             <div class="paper"><div class="inv">${billDocHTML(estAsDoc(e), st)}</div></div>
@@ -7432,7 +7474,7 @@
           ${d.bank.length ? `<div class="inv-block inv-block-bank"><div class="inv-kicker">Bank details</div>
             <div class="inv-lines">${d.bank.map(function (x) { return `<span>${esc(x)}</span>`; }).join('')}</div></div>` : ''}
         </div>` : ''}
-        ${s.printDescription !== false && inv.note ? `<div class="inv-block"><div class="inv-kicker">Note</div><div class="inv-line">${esc(inv.note)}</div></div>` : ''}
+        ${s.printDescription !== false && inv.note ? `<div class="inv-block"><div class="inv-kicker">Description</div><div class="inv-line">${esc(inv.note)}</div></div>` : ''}
         ${s.printTerms !== false && d.terms.length ? `<div class="inv-block"><div class="inv-kicker">Terms</div>
           <div class="inv-terms">${d.terms.slice(0, 6).map(function (x, i) {
             return `<div class="inv-term"><b>${i + 1}.</b><span>${esc(x)}</span></div>`;
@@ -7771,6 +7813,7 @@
             </div>` : ''}
           </div>
         </div>` : ''}
+        ${s.printDescription !== false && inv.note ? `<div class="a5-strip"><b>Description:</b> ${esc(inv.note)}</div>` : ''}
         ${s.printAcknowledgement ? `<div class="a5-strip"><b>Acknowledgement:</b> Received with thanks.</div>` : ''}
         ${footBits.length ? `<div class="a5-signs">${footBits.join('')}</div>` : ''}
       </div>`;
@@ -7836,6 +7879,7 @@
         ${inv.emi && inv.emi.months ? sum('Tenure', num(inv.emi.months) + ' months') : ''}
         ${inv.emi && inv.emi.date ? sum('EMI starts', esc(fmtDate(inv.emi.date))) : ''}
         <div class="rcpt-rule"></div>
+        ${s.printDescription!==false && inv.note ? `<div class="rcpt-sub" style="margin-top:4px">${esc(inv.note)}</div>` : ''}
         ${qr ? `<div class="rcpt-center" style="margin:6px 0">${qr}</div>` : ''}
         ${s.printTerms!==false && terms.length ? `<div class="rcpt-sub" style="margin-top:4px">${terms.slice(0,4).map(function (x,i){ return (i+1)+'. '+esc(x); }).join('<br>')}</div>` : ''}
         ${s.printAcknowledgement ? `<div class="rcpt-center rcpt-sub" style="margin-top:4px">Received with thanks.</div>` : ''}
@@ -8132,6 +8176,7 @@
     if (!inv.isEstimate && s.showBankOnInvoice !== false) {
       section('PAYMENT DETAILS', a5 ? [d.bank.join(' · ')] : d.bank);
     }
+    if (s.printDescription !== false && inv.note) section('DESCRIPTION', [inv.note]);
     section('TERMS', a5 ? [d.terms.slice(0, 4).join(' · ')] : d.terms.slice(0, 6), a5 ? '' : '• ');
 
     y = Math.max(blockBottom, ly) + 4;
@@ -8589,6 +8634,7 @@
             <div class="bp-status ${statusCls}">${statusTxt}${!paid ? ' · ' + money(due) : ''}</div>
           </div>
         </div>
+        ${inv.internalNote ? `<div class="bp-narration"><b>Narration</b><span>${esc(inv.internalNote)}</span></div>` : ''}
         <div class="bill-preview" data-paper="${billPaper(st)}">
           <div class="paper-fit">
             <div class="paper"><div class="inv">${billDocHTML(inv, st)}</div></div>
@@ -10633,18 +10679,12 @@
     if (kind === 'item-sheet-q') {
       var sh = itemSheetState ? itemSheetState() : (ui.itemSheet || (ui.itemSheet = { open: false, q: '', sel: {} }));
       sh.q = el.value;
-      // re-render sheet only? full render is fine and simple
-      var listEl = document.querySelector('.sheet-list');
-      var headSub = document.querySelector('.sheet-head .sub');
-      var footBtn = document.querySelector('.sheet-foot .btn.primary');
-      if (listEl) {
-        render();
-        var again = document.querySelector('[data-input="item-sheet-q"]');
-        if (again) { again.focus(); try { again.setSelectionRange(again.value.length, again.value.length); } catch(e){} }
-        if (typeof syncViewportHeight === 'function') syncViewportHeight();
-      } else {
-        render();
-      }
+      /* a new search starts at the top of the list; keeping the old position
+         would hide the matches */
+      render({ resetSheet: true });
+      var again = document.querySelector('[data-input="item-sheet-q"]');
+      if (again) { again.focus(); try { again.setSelectionRange(again.value.length, again.value.length); } catch(e){} }
+      if (typeof syncViewportHeight === 'function') syncViewportHeight();
       return;
     }
     if (kind === 'p-item-sheet-q') {
@@ -10835,6 +10875,8 @@
       ui.bill.fields[el.getAttribute('data-id')] = el.value;
       return;
     }
+    if (kind === 'bill-note') { if (ui.bill) ui.bill.note = el.value; return; }
+    if (kind === 'bill-narration') { if (ui.bill) ui.bill.internalNote = el.value; return; }
     if (kind === 'bill-date') {
       if (!ui.bill) return;
       if (ui.bill.editId) ui.bill.editDate = el.value || ui.bill.editDate;
