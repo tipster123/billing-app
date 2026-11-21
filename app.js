@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v144';
+  var APP_VERSION = 'v145';
   var APP_BRANCH = 'newfix1';
 
   var db = null;
@@ -5143,6 +5143,19 @@
       <span class="itm-scope-note">${ui.itmAll ? 'Every branch combined' : esc(branchName(ui.branch)) + ' only'}</span>
     </div>`;
   }
+  function itmTotalsHTML() {
+    if (!S.isOwner()) return '';
+    var totalQty = 0, totalAmt = 0;
+    db.items.forEach(function (it) {
+      var q = S.totalStock(it);
+      totalQty = r2(totalQty + q);
+      totalAmt = r2(totalAmt + r2(q * (Number(it.cost) || 0)));
+    });
+    return `<div class="itm-total-bar" aria-label="Total item values">
+      <span class="itm-total-left">All branches Every branch combined</span>
+      <span class="itm-total-right">${num(totalQty)} - ${money(totalAmt)}</span>
+    </div>`;
+  }
 
   function viewItems() {
     var open = ui.itemOpen ? itemById(ui.itemOpen) : null;
@@ -5166,6 +5179,7 @@
       ${st.open ? fPanelHTML('items') : ''}
       ${fChipsHTML('items')}
       ${itmScopeHTML()}
+      ${itmTotalsHTML()}
       <div id="itemsList">${itemListHTML()}</div>
     </div>`;
   }
