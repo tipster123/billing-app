@@ -1838,3 +1838,12 @@ html[data-theme="dark"] #pSheetHost .sheet-search .inp {
   }
   .itm-total-left{font-weight:600;color:var(--text,#0f172a)}
   .itm-total-right{font-weight:700;color:var(--text,#0f172a);white-space:nowrap;text-align:right}
+
+  /* ---- bin page filters ---- */
+  .bin-filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .bin-filters .inp{flex:1 1 180px;min-width:140px}
+  .bin-filters select.inp{flex:0 1 165px}
+  @media screen and (max-width:519px){
+    .bin-filters{display:grid;grid-template-columns:1fr;gap:8px}
+    .bin-filters .inp,.bin-filters select.inp{width:100%;flex:none}
+  }

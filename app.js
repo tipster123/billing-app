@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v145';
+  var APP_VERSION = 'v146';
   var APP_BRANCH = 'newfix1';
 
   var db = null;
@@ -24,7 +24,8 @@
     inv: { status: 'all', page: 1, per: 12 },
     rep: { from: '', to: '' }, bill: null, transfer: null,
     settingsTab: 'company', scCharges: null, scTerms: null, scFields: null, pdf: null, previewStyle: '',
-    expLink: { q: '', ids: [] }
+    expLink: { q: '', ids: [] },
+    bin: { q: '', kind: 'all', sort: 'new' }
   };
 
   var esc = S.esc, money = S.money, num = S.num, r2 = S.r2,
@@ -197,29 +198,102 @@
     toast('Bin emptied');
   }
 
-  /* the settings page gets a card for both nets */
+  /* daily copies shown in settings; deleted entries live on their own Bin page */
   function safetyNetHTML() {
     var snaps = snapshots();
     var older = snaps.filter(function (x) { return x.day < today(); });
     var latest = older[older.length - 1];
-    var bin = trashEntries();
-    var binRows = bin.slice().reverse().slice(0, 20).map(function (e) {
-      var age = Math.ceil((TRASH_DAYS * 86400000 - (Date.now() - e.at)) / 86400000);
-      return `<div class="rrow"><div class="grow"><div class="title">${esc(e.name || 'Entry')}</div>
-        <div class="sub">${esc(e.sub || '')} · ${esc(e.kind)} · ${age > 0 ? age + ' day' + (age === 1 ? '' : 's') + ' left' : 'last day'}</div></div>
-        <div class="amt"><button class="btn sm" data-act="trash-restore" data-id="${esc(e.id)}">Restore</button></div></div>`;
-    }).join('');
-    return `<div class="card"><h3>Yesterday and the bin</h3>
-      <div class="sub" style="margin-bottom:10px">A copy of everything is saved once a day on this device — the last ${SNAP_KEEP} days. Deleted bills, items, parties and expenses wait in the bin for ${TRASH_DAYS} days.</div>
+    return `<div class="card"><h3>Daily copies</h3>
+      <div class="sub" style="margin-bottom:10px">A copy of everything is saved once a day on this device — the last ${SNAP_KEEP} days.</div>
       <div class="row-actions" style="margin-bottom:12px">
         <button class="btn" data-act="restore-yesterday"${latest ? '' : ' disabled'}>Restore from ${latest ? fmtDate(latest.day) : 'yesterday'}</button>
         <button class="btn" data-act="snapshot-now">Save a copy now</button>
       </div>
-      <div class="sub" style="margin-bottom:6px">${snaps.length ? 'Copies kept: ' + snaps.map(function (x) { return fmtDate(x.day); }).join(', ') : 'No daily copy yet — one is made the first time the app is opened each day.'}</div>
-      <div class="section-title" style="margin-top:12px">In the bin</div>
-      ${binRows || '<div class="sub">Nothing deleted in the last ' + TRASH_DAYS + ' days.</div>'}
-      ${bin.length ? '<div class="row-actions" style="margin-top:10px"><button class="btn danger sm" data-act="trash-empty">Empty the bin</button></div>' : ''}
+      <div class="sub">${snaps.length ? 'Copies kept: ' + snaps.map(function (x) { return fmtDate(x.day); }).join(', ') : 'No daily copy yet — one is made the first time the app is opened each day.'}</div>
     </div>`;
+  }
+
+  function binState() {
+    if (!ui.bin || typeof ui.bin !== 'object') ui.bin = { q: '', kind: 'all', sort: 'new' };
+    if (!ui.bin.q) ui.bin.q = '';
+    if (!ui.bin.kind) ui.bin.kind = 'all';
+    if (!ui.bin.sort) ui.bin.sort = 'new';
+    return ui.bin;
+  }
+  function binKindLabel(kind) {
+    var labels = {
+      invoice: 'Invoice',
+      item: 'Item',
+      customer: 'Customer',
+      supplier: 'Supplier',
+      expense: 'Expense',
+      purchase: 'Purchase',
+      damage: 'Damage / loss',
+      transfer: 'Transfer',
+      complaint: 'Complaint'
+    };
+    return labels[kind] || (kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : 'Entry');
+  }
+  function binKinds() {
+    return ['invoice', 'item', 'customer', 'supplier', 'expense', 'purchase', 'damage', 'transfer', 'complaint'];
+  }
+  function binDaysLeft(e) {
+    return Math.ceil((TRASH_DAYS * 86400000 - (Date.now() - (e.at || 0))) / 86400000);
+  }
+  function viewBin() {
+    var st = binState();
+    var all = trashEntries();
+    var kinds = binKinds();
+    var q = String(st.q || '').trim().toLowerCase();
+    var filtered = all.filter(function (e) {
+      if (st.kind && st.kind !== 'all' && e.kind !== st.kind) return false;
+      if (!q) return true;
+      var hay = [e.name || '', e.sub || '', e.kind || '', binKindLabel(e.kind)].join(' ').toLowerCase();
+      return hay.indexOf(q) !== -1;
+    });
+    filtered.sort(function (a, b) {
+      if (st.sort === 'old') return (a.at || 0) - (b.at || 0);
+      if (st.sort === 'exp') return binDaysLeft(a) - binDaysLeft(b) || (a.at || 0) - (b.at || 0);
+      return (b.at || 0) - (a.at || 0);
+    });
+    var rows = filtered.map(function (e) {
+      var days = binDaysLeft(e);
+      var age = days > 0 ? days + ' day' + (days === 1 ? '' : 's') + ' left' : 'last day';
+      var when = new Date(e.at || Date.now());
+      var whenDay = when.getFullYear() + '-' + String(when.getMonth() + 1).padStart(2, '0') + '-' + String(when.getDate()).padStart(2, '0');
+      var meta = [binKindLabel(e.kind), fmtDate(whenDay), age];
+      if (e.sub) meta.splice(1, 0, e.sub);
+      return `<div class="rrow"><div class="grow"><div class="title">${esc(e.name || 'Entry')}</div>
+        <div class="sub">${esc(meta.join(' · '))}</div></div>
+        <div class="amt"><button class="btn sm" data-act="trash-restore" data-id="${esc(e.id)}">Restore</button></div></div>`;
+    }).join('');
+    var kindOpts = '<option value="all"' + (st.kind === 'all' ? ' selected' : '') + '>All types</option>' +
+      kinds.map(function (k) { return '<option value="' + esc(k) + '"' + (st.kind === k ? ' selected' : '') + '>' + esc(binKindLabel(k)) + '</option>'; }).join('');
+    /* one tap per type, with how many of each are waiting */
+    var counts = { all: all.length };
+    all.forEach(function (e) { counts[e.kind] = (counts[e.kind] || 0) + 1; });
+    var chipKinds = ['all'].concat(kinds.filter(function (k) { return counts[k]; }));
+    var chips = all.length ? '<div class="rep-chips" style="margin:0 0 10px">' + chipKinds.map(function (k) {
+      return '<button type="button" data-act="bin-filter" data-id="' + esc(k) + '" class="' + (st.kind === k ? 'on' : '') + '">' +
+        esc(k === 'all' ? 'All' : binKindLabel(k)) + ' (' + (counts[k] || 0) + ')</button>';
+    }).join('') + '</div>' : '';
+    var sortOpts = [
+      ['new', 'Newest deleted'],
+      ['old', 'Oldest deleted'],
+      ['exp', 'Expiring soon']
+    ].map(function (o) { return '<option value="' + o[0] + '"' + (st.sort === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('');
+    return `<div class="page-head"><div><h2>Bin</h2><div class="sub">Deleted entries are kept for ${TRASH_DAYS} days. Restore anything you removed by mistake.</div></div></div>
+      <div class="card">
+        ${chips}
+        <div class="bin-filters" style="margin-bottom:12px">
+          <input class="inp" type="search" data-input="q-bin" placeholder="Search by name, detail or type" value="${esc(st.q || '')}" autocomplete="off">
+          <select class="inp" data-change="bin-kind" aria-label="Filter by type">${kindOpts}</select>
+          <select class="inp" data-change="bin-sort" aria-label="Sort">${sortOpts}</select>
+        </div>
+        <div class="sub" style="margin-bottom:10px">${filtered.length} of ${all.length} entr${all.length === 1 ? 'y' : 'ies'} shown</div>
+        ${rows || '<div class="empty"><b>Nothing in the bin</b>' + (all.length ? 'No entries match these filters.' : 'Deleted bills, items, parties and other entries will appear here for ' + TRASH_DAYS + ' days.') + '</div>'}
+        ${all.length ? '<div class="row-actions" style="margin-top:12px"><button class="btn danger sm" data-act="trash-empty">Empty the bin</button></div>' : ''}
+      </div>`;
   }
 
   /* Writing to the browser can fail (storage full, private mode, blocked site
@@ -975,7 +1049,8 @@
     back: '<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10H9"/>',
     warn: '<path d="M12 3 2 20h20z"/><path d="M12 9v5M12 17h.01"/>',
     book: '<path d="M4 4h13a2 2 0 0 1 2 2v14H6a2 2 0 0 1-2-2z"/><path d="M8 8h7M8 12h7M8 16h4"/>',
-    chat: '<path d="M21 12a8 8 0 0 1-8 8H7l-4 3 1.2-4.2A8 8 0 1 1 21 12z"/><path d="M9 11h.01M12.5 11h.01M16 11h.01"/>'
+    chat: '<path d="M21 12a8 8 0 0 1-8 8H7l-4 3 1.2-4.2A8 8 0 1 1 21 12z"/><path d="M9 11h.01M12.5 11h.01M16 11h.01"/>',
+    bin: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/>'
   };
 
   var TABS = [
@@ -993,6 +1068,7 @@
     { id: 'expenses', label: 'Expenses', icon: 'money', perm: 'expenses', title: 'Expenses' },
     { id: 'reports', label: 'Reports', icon: 'chart', perm: 'reports', title: 'Reports' },
     { id: 'staff', label: 'Staff & access', icon: 'staff', perm: 'staff', title: 'Staff & access' },
+    { id: 'bin', label: 'Bin', icon: 'bin', perm: 'settings', title: 'Bin' },
     { id: 'settings', label: 'Settings', icon: 'gear', perm: 'settings', title: 'Settings' }
   ];
 
@@ -1403,6 +1479,7 @@
       else if (ui.tab === 'expenses') v.innerHTML = viewExpenses();
       else if (ui.tab === 'reports') v.innerHTML = viewReports();
       else if (ui.tab === 'staff') v.innerHTML = viewStaff();
+      else if (ui.tab === 'bin') v.innerHTML = viewBin();
       else v.innerHTML = viewSettings();
     } catch (e) {
       v.innerHTML = '<div class="card"><b>Could not open this page</b><div class="sub" style="margin-top:6px;white-space:pre-wrap">' + esc(String(e && (e.stack || e.message || e))) + '</div></div>';
@@ -9466,6 +9543,7 @@
       save();
       return toast('Restored the copy from ' + fmtDate(pick.day));
     }
+    if (action === 'bin-filter') { binState().kind = id || 'all'; return render(); }
     if (action === 'trash-restore') { return trashRestore(id); }
     if (action === 'trash-empty') {
       if (!confirm('Throw away everything in the bin? It cannot come back after this.')) return;
@@ -10539,6 +10617,7 @@
     }
     if (kind === 'q-staff') { ui.qStaff = el.value; return render(); }
     if (kind === 'q-sup') { ui.supQ = el.value; return render(); }
+    if (kind === 'q-bin') { binState().q = el.value; return render(); }
     if (kind === 'rep-from') { ui.rep.from = el.value; return render(); }
     if (kind === 'rep-to') { ui.rep.to = el.value; return render(); }
     if (kind === 'q-inv') { ui.qInv = el.value; invState().page = 1; var t1 = $('#invTable'); if (t1) t1.innerHTML = invoiceTable(); return; }
@@ -10763,6 +10842,8 @@
   function onChange(el) {
     var kind = el.getAttribute('data-change');
     if (!kind) return;
+    if (kind === 'bin-kind') { binState().kind = el.value || 'all'; return render(); }
+    if (kind === 'bin-sort') { binState().sort = el.value || 'new'; return render(); }
     if (kind === 'exp-paid-flag') { updateExpBalHint(); return; }
     if (kind === 'cmp-inv') return cmpBillChanged(el.value);
     if (kind === 'pdf-style') {
