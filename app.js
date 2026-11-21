@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v149';
+  var APP_VERSION = 'v150';
   var APP_BRANCH = 'newfix1';
 
   var db = null;
@@ -185,7 +185,7 @@
     /* the delete put stock back, so restoring takes it out again */
     (e.stockBack || []).forEach(function (m) {
       var it = itemById(m.itemId);
-      if (it) S.addStock(it, m.branchId, -(Number(m.qty) || 0));
+      if (it) S.addStock(it, m.branchId, -(Number(m.qty) || 0), { batchId: m.batchId || '' });
     });
     db[arrName].push(e.rec);
     writeLocalJson(TRASH_KEY, list.filter(function (x) { return x.id !== trashId; }));
@@ -1371,7 +1371,8 @@
       return {
         itemId: l.itemId || '', name: l.name, qty: Number(l.qty) || 1,
         price: Number(l.price) || 0, cost: Number(l.cost) || 0, disc: Number(l.disc) || 0,
-        desc: String(l.desc || ''), imei: String(l.imei || ''), serial: String(l.serial || '')
+        desc: String(l.desc || ''), imei: String(l.imei || ''), serial: String(l.serial || ''),
+        batchId: String(l.batchId || ''), batchNo: String(l.batchNo || '')
       };
     });
     var fields = {};
@@ -2257,9 +2258,11 @@
 
   function cartLine(l, i) {
     var details = [];
+    if (l.batchNo) details.push(esc(l.batchNo));
     if (l.desc) details.push(esc(l.desc));
     if (l.imei) details.push('IMEI: ' + esc(l.imei));
     if (l.serial) details.push('Serial: ' + esc(l.serial));
+    if (can('profit.view') && Number(l.cost) > 0) details.push('Profit ' + money(r2((Number(l.price) || 0) - (Number(l.cost) || 0))));
     var qty = Number(l.qty) || 0;
     var price = Number(l.price) || 0;
     var gross = r2(qty * price);
@@ -2268,7 +2271,8 @@
     var taxShow = (db.settings && db.settings.taxOn !== false && (Number(db.settings.taxRate) || 0) > 0);
     var it = itemById(l.itemId);
     var brId = billBranchId();
-    var have = it ? (Number(S.stockOf(it, brId)) || 0) : null;
+    var lb = (it && l.batchId) ? S.batchById(it, l.batchId) : null;
+    var have = it ? (lb ? Number(S.batchStock(lb, brId)) || 0 : Number(S.stockOf(it, brId)) || 0) : null;
     var over = (have != null && qty > have + 0.0001);
     return `<div class="billed-item" data-act="line-more" data-id="${i}" role="button" tabindex="0">
       <div class="bi-top">
@@ -2283,6 +2287,29 @@
     </div>`;
   }
 
+  function batchPickHTML(l) {
+    var it = itemById(l.itemId);
+    if (!it) return '';
+    var brId = billBranchId();
+    var batches = S.itemBatches(it);
+    var showCost = can('profit.view');
+    if (!batches.length) return '';
+    var rows = batches.slice().sort(function (a, b) { return (Number(a.no) || 0) - (Number(b.no) || 0); }).map(function (bt) {
+      var have = S.batchStock(bt, brId);
+      var mine = (l.batchId || '') === bt.id;
+      var label = bt.label || ('Batch ' + bt.no);
+      return `<label class="batch-row${mine ? ' sel' : ''}">
+        <input type="radio" name="batchId" value="${bt.id}"${mine ? ' checked' : ''}${have > 0 ? '' : ' disabled'}>
+        <span class="batch-main"><span class="batch-name">${esc(label)}</span>
+          <span class="batch-meta">${have > 0 ? num(have) + ' in ' + esc(branchName(brId)) : 'No stock in ' + esc(branchName(brId))}${showCost ? ' · cost ' + money(bt.cost) : ''}${bt.purchaseNo ? ' · ' + esc(bt.purchaseNo) : ''}</span></span>
+        ${showCost ? `<span class="batch-profit">${l.price != null ? 'margin ' + money(r2((Number(l.price) || 0) - (Number(bt.cost) || 0))) : ''}</span>` : ''}
+      </label>`;
+    }).join('');
+    return `<div class="field"><label>Batch</label>
+      <div class="batch-list">${rows}</div>
+      <div class="sub" style="margin-top:4px">Profit on this bill is worked out from the batch you pick.${showCost ? '' : ' Costs are hidden for your login.'}</div></div>`;
+  }
+
   function lineDetailsModal(i) {
     if (!ui.bill || !ui.bill.lines[i]) return;
     var l = ui.bill.lines[i];
@@ -2294,6 +2321,7 @@
         <div class="field"><label>Quantity</label><input class="inp" type="text" inputmode="decimal" name="qty" value="${l.qty || 1}" min="1"></div>
         <div class="field"><label>Discount on this item (₹)</label><input class="inp" type="text" inputmode="decimal" name="disc" value="${ldisc ? ldisc : ''}" placeholder="0"></div>
       </div>
+      ${batchPickHTML(l)}
       <div class="field"><label>Description</label><input class="inp" name="desc" value="${esc(l.desc || '')}" placeholder="Colour, size, condition…"></div>
       <div class="grid2">
         <div class="field"><label>IMEI number</label><input class="inp" name="imei" value="${esc(l.imei || '')}" placeholder="For phones/devices"></div>
@@ -2317,17 +2345,32 @@
     var by = Object.create(null);
     (lines || []).forEach(function (l) {
       if (!l.itemId) return;
-      by[l.itemId] = r2((by[l.itemId] || 0) + (Number(l.qty) || 0));
+      var k = l.itemId + '|' + (l.batchId || '');
+      by[k] = r2((by[k] || 0) + (Number(l.qty) || 0));
     });
     var over = [];
-    Object.keys(by).forEach(function (id) {
-      var it = itemById(id); if (!it) return;
-      var have = Number(S.stockOf(it, branchId)) || 0;
-      var need = Number(by[id]) || 0;
-      if (need > have + 0.0001) over.push({ it: it, need: need, have: have, short: r2(need - have) });
+    Object.keys(by).forEach(function (k) {
+      var parts = k.split('|');
+      var it = itemById(parts[0]); if (!it) return;
+      var bt = parts[1] ? S.batchById(it, parts[1]) : null;
+      var have = bt ? Number(S.batchStock(bt, branchId)) || 0 : Number(S.stockOf(it, branchId)) || 0;
+      var need = Number(by[k]) || 0;
+      var nm = it.name + (bt ? ' · ' + (bt.label || ('Batch ' + bt.no)) : '');
+      if (need > have + 0.0001) over.push({ it: { id: it.id, name: nm }, need: need, have: have, short: r2(need - have) });
     });
     return over;
   }
+  /* Stock corrections from the item page have to land in a batch, otherwise the
+     next stock move would rebuild item.stock from the batches and undo them. */
+  function setBranchStock(it, branchId, want) {
+    if (!it) return;
+    var have = r2(Number(S.stockOf(it, branchId)) || 0);
+    var delta = r2((Number(want) || 0) - have);
+    if (!delta) return;
+    var batches = S.itemBatches(it);
+    S.addStock(it, branchId, delta, { batchId: batches.length ? batches[batches.length - 1].id : '' });
+  }
+
   function oversellMsg(over, branchId) {
     var br = branchName(branchId);
     return (over || []).map(function (o) { return 'Only ' + num(o.have) + ' in ' + br + ' for ' + o.it.name; }).join('. ');
@@ -2345,17 +2388,26 @@
     var it = itemById(id);
     if (!it) return;
     var addQty = Math.max(1, Math.floor(Number(opts.qty) || 1));
+    var brId = billBranchId();
+    var batchId = opts.batchId || '';
+    var bt = batchId ? S.batchById(it, batchId) : S.pickSaleBatch(it, brId);
+    if (!bt && Array.isArray(it.batches) && it.batches.length) bt = it.batches[0];
+    var cost = bt ? r2(Number(bt.cost) || 0) : r2(Number(it.cost) || 0);
     if (ui.bill && ui.bill.kind !== 'estimate') {
-      var brId = billBranchId();
-      var next = (ui.bill.lines || []).map(function (l) { return { itemId: l.itemId, qty: l.qty }; });
-      var hit = next.filter(function (l) { return l.itemId === id; })[0];
-      if (hit) hit.qty = r2((Number(hit.qty) || 0) + addQty); else next.push({ itemId: id, qty: addQty });
+      var next = (ui.bill.lines || []).map(function (l) { return { itemId: l.itemId, batchId: l.batchId || '', qty: l.qty }; });
+      var hit = next.filter(function (l) { return l.itemId === id && (l.batchId || '') === (bt ? bt.id : ''); })[0];
+      if (hit) hit.qty = r2((Number(hit.qty) || 0) + addQty);
+      else next.push({ itemId: id, batchId: bt ? bt.id : '', qty: addQty });
       var over = stockOverLines(next, brId);
       if (over.length && !opts.force && !allowOversell(over, brId)) return;
     }
-    var line = ui.bill.lines.filter(function (l) { return l.itemId === id; })[0];
-    if (line) line.qty = r2((Number(line.qty) || 0) + addQty);
-    else ui.bill.lines.push({ itemId: it.id, name: it.name, qty: addQty, price: Number(it.price) || 0, cost: Number(it.cost) || 0, disc: 0, desc: '', imei: '', serial: '' });
+    var line = ui.bill.lines.filter(function (l) { return l.itemId === id && (l.batchId || '') === (bt ? bt.id : ''); })[0];
+    if (line) {
+      line.qty = r2((Number(line.qty) || 0) + addQty);
+      if (bt) { line.batchId = bt.id; line.batchNo = bt.label || ('Batch ' + bt.no); line.cost = cost; }
+    } else {
+      ui.bill.lines.push({ itemId: it.id, name: it.name, qty: addQty, price: Number(it.price) || 0, cost: cost, disc: 0, desc: '', imei: '', serial: '', batchId: bt ? bt.id : '', batchNo: bt ? (bt.label || ('Batch ' + bt.no)) : '' });
+    }
     if (!opts.silent) {
       ui.q = '';
       render();
@@ -2474,11 +2526,13 @@
 
     var snapshot = JSON.parse(JSON.stringify(inv));
     var branchId = inv.branchId;
-    keys.forEach(function (id) {
-      var it = itemById(id);
-      if (!it) return;
-      var d = r2((newMap[id] || 0) - (oldMap[id] || 0));
-      if (d) S.addStock(it, branchId, -d);
+    (inv.lines || []).forEach(function (l) {
+      var it = itemById(l.itemId);
+      if (it) S.addStock(it, branchId, Number(l.qty) || 0, { batchId: l.batchId || '' });
+    });
+    (b.lines || []).forEach(function (l) {
+      var it = itemById(l.itemId);
+      if (it) S.addStock(it, branchId, -(Number(l.qty) || 0), { batchId: l.batchId || '' });
     });
 
     if (b.editDate && /^\d{4}-\d{2}-\d{2}$/.test(b.editDate)) inv.date = b.editDate;
@@ -2486,7 +2540,8 @@
     inv.lines = b.lines.map(function (l) {
       return {
         itemId: l.itemId, name: l.name, qty: l.qty, price: l.price, cost: l.cost, disc: r2(Number(l.disc) || 0),
-        desc: String(l.desc || ''), imei: String(l.imei || ''), serial: String(l.serial || '')
+        desc: String(l.desc || ''), imei: String(l.imei || ''), serial: String(l.serial || ''),
+        batchId: String(l.batchId || ''), batchNo: String(l.batchNo || '')
       };
     });
     inv.discount = Number(b.discount) || 0;
@@ -2516,15 +2571,8 @@
     toast('Bill ' + inv.no + ' updated', { undo: { label: 'Bill changes undone', run: function () {
       var cur = invById(snapshot.id);
       if (!cur) return;
-      var curMap = lineQtyMap(cur.lines);
-      var backMap = lineQtyMap(snapshot.lines);
-      Object.keys(curMap).concat(Object.keys(backMap)).filter(function (k, n, arr) { return arr.indexOf(k) === n; })
-        .forEach(function (id) {
-          var it = itemById(id);
-          if (!it) return;
-          var d = r2((curMap[id] || 0) - (backMap[id] || 0));
-          if (d) S.addStock(it, branchId, d);
-        });
+      (cur.lines || []).forEach(function (l) { var it = itemById(l.itemId); if (it) S.addStock(it, branchId, Number(l.qty) || 0, { batchId: l.batchId || '' }); });
+      (snapshot.lines || []).forEach(function (l) { var it = itemById(l.itemId); if (it) S.addStock(it, branchId, -(Number(l.qty) || 0), { batchId: l.batchId || '' }); });
       db.invoices = db.invoices.map(function (x) { return x.id === snapshot.id ? snapshot : x; });
     } } });
     openBillPreview(inv);
@@ -2602,7 +2650,7 @@
       date: (b.date && /^\d{4}-\d{2}-\d{2}$/.test(b.date)) ? b.date : today(), created: Date.now(),
       branchId: ui.branch, staffId: staff ? staff.id : '',
       customerId: b.customerId || '',
-      lines: b.lines.map(function (l) { return { itemId: l.itemId, name: l.name, qty: l.qty, price: l.price, cost: l.cost, disc: r2(Number(l.disc) || 0), desc: String(l.desc || ''), imei: String(l.imei || ''), serial: String(l.serial || '') }; }),
+      lines: b.lines.map(function (l) { return { itemId: l.itemId, name: l.name, qty: l.qty, price: l.price, cost: l.cost, disc: r2(Number(l.disc) || 0), desc: String(l.desc || ''), imei: String(l.imei || ''), serial: String(l.serial || ''), batchId: String(l.batchId || ''), batchNo: String(l.batchNo || '') }; }),
       discount: b.discount,
       taxRate: (db.settings.taxOn !== false && ui.bill.taxOn === true ? (Number(db.settings.taxRate) || 0) : 0),
       charges: billChargesOn(),
@@ -2619,7 +2667,7 @@
     };
     inv.lines.forEach(function (l) {
       var it = itemById(l.itemId);
-      if (it) S.addStock(it, ui.branch, -l.qty);
+      if (it) S.addStock(it, ui.branch, -l.qty, { batchId: l.batchId || '' });
     });
     db.invoices.push(inv);
     logActivity('Saved bill ' + inv.no + ' for ' + (findCust(inv.customerId) ? findCust(inv.customerId).name : 'walk-in') + ' (' + money(inv.total) + ')', 'bill');
@@ -2642,7 +2690,7 @@
       date: (b.date && /^\d{4}-\d{2}-\d{2}$/.test(b.date)) ? b.date : today(), created: Date.now(),
       branchId: ui.branch, staffId: staff ? staff.id : '',
       customerId: b.customerId || '',
-      lines: b.lines.map(function (l) { return { itemId: l.itemId, name: l.name, qty: l.qty, price: l.price, cost: l.cost, disc: r2(Number(l.disc) || 0), desc: String(l.desc || ''), imei: String(l.imei || ''), serial: String(l.serial || '') }; }),
+      lines: b.lines.map(function (l) { return { itemId: l.itemId, name: l.name, qty: l.qty, price: l.price, cost: l.cost, disc: r2(Number(l.disc) || 0), desc: String(l.desc || ''), imei: String(l.imei || ''), serial: String(l.serial || ''), batchId: String(l.batchId || ''), batchNo: String(l.batchNo || '') }; }),
       discount: b.discount,
       taxRate: (db.settings.taxOn !== false && b.taxOn === true ? (Number(db.settings.taxRate) || 0) : 0),
       charges: billChargesOn(),
@@ -2730,7 +2778,8 @@
     ui.bill.lines = (e.lines || []).map(function (l) {
       return { itemId: l.itemId || '', name: l.name, qty: Number(l.qty) || 1, price: Number(l.price) || 0,
         cost: Number(l.cost) || 0, disc: Number(l.disc) || 0, desc: String(l.desc || ''),
-        imei: String(l.imei || ''), serial: String(l.serial || '') };
+        imei: String(l.imei || ''), serial: String(l.serial || ''),
+        batchId: String(l.batchId || ''), batchNo: String(l.batchNo || '') };
     });
     ui.bill.discount = Number(e.discount) || 0;
     (e.charges || []).forEach(function (c) {
@@ -4078,7 +4127,8 @@
 
   function pLineHTML(l) {
     var multi = db.branches.length > 1;
-    var extras = [l.quality ? 'Quality: ' + l.quality : '', l.brand ? 'Brand: ' + l.brand : '', l.color ? 'Colour: ' + l.color : '', l.size ? 'Size: ' + l.size : '', l.serial ? 'Serial: ' + l.serial : ''].filter(Boolean);
+    var lineBatch = l.batchId ? S.batchById(itemById(l.itemId), l.batchId) : null;
+    var extras = [l.quality ? 'Quality: ' + l.quality : '', l.brand ? 'Brand: ' + l.brand : '', l.color ? 'Colour: ' + l.color : '', l.size ? 'Size: ' + l.size : '', l.serial ? 'Serial: ' + l.serial : '', lineBatch ? (lineBatch.label || ('Batch ' + lineBatch.no)) : ''].filter(Boolean);
     var hideMoney = (typeof purchaseApprovalMode === 'function') && purchaseApprovalMode() && !(pDraft && (pDraft.approving || pDraft.editing));
     return `<div class="p-item p-item-compact" data-line="${l.uid}">
       <details class="p-item-details">
@@ -4231,7 +4281,8 @@
             uid: uid(), itemId: l.itemId, name: l.name, sku: '', qty: Math.max(1, Math.floor(Number(l.qty) || 1)),
             cost: r2(Number(l.cost) || 0), disc: r2(Number(l.disc) || 0),
             quality: String(l.quality || ''), brand: String(l.brand || ''), color: String(l.color || ''),
-            size: String(l.size || ''), serial: String(l.serial || ''), alloc: JSON.parse(JSON.stringify(l.alloc || {}))
+            size: String(l.size || ''), serial: String(l.serial || ''), batchId: String(l.batchId || ''),
+            alloc: JSON.parse(JSON.stringify(l.alloc || {}))
           };
         })
       };
@@ -4250,7 +4301,8 @@
             uid: uid(), itemId: l.itemId, name: l.name, sku: '', qty: Math.max(1, Math.floor(Number(l.qty) || 1)),
             cost: r2(Number(l.cost) || 0), disc: r2(Number(l.disc) || 0),
             quality: String(l.quality || ''), brand: String(l.brand || ''), color: String(l.color || ''),
-            size: String(l.size || ''), serial: String(l.serial || ''), alloc: JSON.parse(JSON.stringify(l.alloc || {}))
+            size: String(l.size || ''), serial: String(l.serial || ''), batchId: String(l.batchId || ''),
+            alloc: JSON.parse(JSON.stringify(l.alloc || {}))
           };
         })
       };
@@ -4511,6 +4563,11 @@
         if (l.color) extra.push('Colour: ' + l.color);
         if (l.size) extra.push('Size: ' + l.size);
         if (l.serial) extra.push('Serial: ' + l.serial);
+        if (l.batchId) {
+          var lIt = itemById(l.itemId);
+          var lBt = lIt ? S.batchById(lIt, l.batchId) : null;
+          if (lBt) extra.push(lBt.label || ('Batch ' + lBt.no));
+        }
         var allocTxt = Object.keys(l.alloc || {}).filter(function (bx) { return Number(l.alloc[bx]) > 0; })
           .map(function (bx) { return branchName(bx) + ': ' + num(l.alloc[bx]); }).join(' · ');
         return `<div class="p-view-line">
@@ -5587,6 +5644,22 @@
           return `<div class="itm-br"><span>${esc(b.name)}</span><b>${num(S.stockOf(it,b.id))}</b></div>`;
         }).join('')}</div>
       </div>
+      ${(function () {
+        var batches = S.itemBatches(it).slice().sort(function (a, b) { return (Number(a.no) || 0) - (Number(b.no) || 0); });
+        if (!batches.length) return '';
+        return `<div class="card" style="margin-bottom:12px">
+          <div class="sub" style="margin-bottom:8px">Batches · ${batches.length}</div>
+          <div class="itm-batches">${batches.map(function (bt) {
+            var left = scopeAll ? S.batchTotalStock(bt) : S.batchStock(bt, ui.branch);
+            var when = bt.created ? new Date(bt.created).toLocaleDateString() : '';
+            return `<div class="itm-batch${left > 0 ? '' : ' empty'}">
+              <span class="batch-name">${esc(bt.label || ('Batch ' + bt.no))}</span>
+              <span class="sub">${[bt.purchaseNo || '', when].filter(Boolean).join(' · ') || 'Opening stock'}${showCost ? ' · cost ' + money(bt.cost) : ''}</span>
+              <b>${num(left)} ${scopeAll ? 'total' : 'here'}</b>
+            </div>`;
+          }).join('')}</div>
+        </div>`;
+      })()}
       ${itmScopeHTML()}
       <div class="section-title">History${scopeAll ? ' · all branches' : ' · ' + esc(branchName(ui.branch))}</div>
       <div class="cust-chips" style="margin-bottom:10px">
@@ -8361,9 +8434,9 @@
     var delInfo = deleteEntryInfo(kind, id) || { name: label, sub: '' };
     var stockBack = [];
     /* every stock move the delete makes is recorded, so a restore can undo it */
-    var moveStock = function (it, br, qty) {
-      S.addStock(it, br, qty);
-      stockBack.push({ itemId: it.id, branchId: br, qty: r2(qty) });
+    var moveStock = function (it, br, qty, batchId) {
+      S.addStock(it, br, qty, batchId ? { batchId: batchId } : undefined);
+      stockBack.push({ itemId: it.id, branchId: br, qty: r2(qty), batchId: batchId || '' });
     };
 
     if (kind === 'invoice') {
@@ -8371,7 +8444,7 @@
       if (!inv) return null;
       (inv.lines || []).forEach(function (l) {
         var it = itemById(l.itemId);
-        if (it) moveStock(it, inv.branchId, Number(l.qty) || 0);
+        if (it) moveStock(it, inv.branchId, Number(l.qty) || 0, l.batchId || '');
       });
       db.invoices = db.invoices.filter(function (x) { return x.id !== id; });
       logActivity('Deleted bill ' + inv.no + ' (' + money(inv.total) + ')', 'delete');
@@ -8383,11 +8456,10 @@
       if (purchaseStatus(p) !== 'pending') {
         (p.lines || []).forEach(function (l) {
           var pit = itemById(l.itemId);
-          if (!pit || !pit.stock) return;
+          if (!pit) return;
           Object.keys(l.alloc || {}).forEach(function (b) {
             var took = Number(l.alloc[b]) || 0;
-            pit.stock[b] = Math.max(0, r2((Number(pit.stock[b]) || 0) - took));
-            if (took) stockBack.push({ itemId: pit.id, branchId: b, qty: -r2(took) });
+            if (took) moveStock(pit, b, -r2(took), l.batchId || '');
           });
         });
       }
@@ -8458,8 +8530,7 @@
           var tit = itemById(l.itemId);
           if (!tit || !tit.stock) return;
           moveStock(tit, tr.from, Number(l.qty) || 0);
-          tit.stock[tr.to] = Math.max(0, r2((Number(tit.stock[tr.to]) || 0) - (Number(l.qty) || 0)));
-          stockBack.push({ itemId: tit.id, branchId: tr.to, qty: -r2(Number(l.qty) || 0) });
+          moveStock(tit, tr.to, -(Number(l.qty) || 0));
         });
       }
       db.transfers = db.transfers.filter(function (x) { return x.id !== id; });
@@ -9081,8 +9152,8 @@
       var stockBack = d.lines.map(function (l) {
         var it = itemById(l.itemId);
         if (!it) return null;
-        S.addStock(it, d.branchId, Number(l.qty));
-        return { id: it.id, branchId: d.branchId, qty: Number(l.qty) };
+        S.addStock(it, d.branchId, Number(l.qty), { batchId: l.batchId || '' });
+        return { id: it.id, branchId: d.branchId, qty: Number(l.qty), batchId: l.batchId || '' };
       });
       db.invoices = db.invoices.filter(function (x) { return x.id !== id; });
       logActivity('Deleted bill ' + d.no + ' (' + money(d.total) + ')', 'delete');
@@ -9090,7 +9161,7 @@
       toast('Bill ' + d.no + ' deleted', { undo: { label: 'Bill restored', run: function () {
         stockBack.forEach(function (b) {
           var it = itemById(b.id);
-          if (it && it.stock && it.stock[b.branchId] != null) it.stock[b.branchId] = Math.max(0, Number(it.stock[b.branchId]) - b.qty);
+          if (it) S.addStock(it, b.branchId, -b.qty, { batchId: b.batchId || '' });
         });
         db.invoices.push(snapshot);
       } } });
@@ -9995,7 +10066,7 @@
         if (can('stock.edit')) {
           db.branches.forEach(function (b) {
             var key = 'stock_' + b.id;
-            if (data[key] != null) existing.stock[b.id] = Number(data[key]) || 0;
+            if (data[key] != null) setBranchStock(existing, b.id, Number(data[key]) || 0);
           });
         }
       } else {
@@ -10186,6 +10257,7 @@
           itemId: l.itemId, name: l.name, qty: qty, cost: r2(Number(l.cost) || 0),
           disc: r2(Number(l.disc) || 0), quality: String(l.quality || ''), brand: String(l.brand || ''),
           color: String(l.color || ''), size: String(l.size || ''), serial: String(l.serial || ''),
+          batchId: String(l.batchId || ''),
           alloc: alloc
         };
       });
@@ -10199,7 +10271,7 @@
         (ep.lines || []).forEach(function (l) {
           var oldIt = itemById(l.itemId);
           if (!oldIt) return;
-          Object.keys(l.alloc || {}).forEach(function (b) { S.addStock(oldIt, b, -(Number(l.alloc[b]) || 0)); });
+          Object.keys(l.alloc || {}).forEach(function (b) { S.addStock(oldIt, b, -(Number(l.alloc[b]) || 0), { batchId: l.batchId || '' }); });
         });
         var esub = pSubtotal();
         var edisc = r2(Math.max(0, Number(pDraft.discount) || 0));
@@ -10214,16 +10286,20 @@
         ep.invoiceNo = String(pDraft.invoiceNo || '').trim();
         ep.date = pDraft.date || ep.date || today();
         ep.note = String(pDraft.note || '');
-        ep.lines = plines;
         ep.subtotal = esub; ep.discount = edisc; ep.shipping = eship; ep.total = r2(etotal);
         ep.payments = epays; ep.paid = epaid; ep.due = r2(Math.max(0, etotal - epaid)); ep.method = emethod;
         ep.editedAt = Date.now(); ep.editedByName = st ? st.name : '';
         plines.forEach(function (l) {
           var it2 = itemById(l.itemId);
           if (!it2) return;
-          Object.keys(l.alloc).forEach(function (b) { S.addStock(it2, b, l.alloc[b]); });
+          var bt = l.batchId ? S.batchById(it2, l.batchId) : null;
+          if (!bt) bt = S.createBatch(it2, { cost: Number(l.cost) || 0, purchaseId: ep.id, purchaseNo: ep.no, supplierId: ep.supplierId || '', created: Date.now() });
+          else bt.cost = r2(Number(l.cost) || 0);
+          l.batchId = bt.id;
+          Object.keys(l.alloc).forEach(function (b) { S.addStock(it2, b, l.alloc[b], { batchId: bt.id }); });
           if (Number(l.cost) > 0) it2.cost = r2(Number(l.cost) || 0);
         });
+        ep.lines = plines;
         logActivity('Edited purchase ' + ep.no + ' (' + money(etotal) + ')', 'purchase');
         pDraft = null;
         save(); closeModal(); render();
@@ -10250,16 +10326,20 @@
         ap.supplierId = pDraft.supplierId;
         ap.method = pmethodA; ap.payments = ppaysA; ap.paid = ppaidA; ap.due = r2(Math.max(0, ptotalA - ppaidA));
         ap.subtotal = psubA; ap.discount = pdiscA; ap.shipping = pshipA; ap.total = r2(ptotalA);
-        ap.note = String(pDraft.note || ''); ap.lines = plines;
+        ap.note = String(pDraft.note || '');
         ap.status = 'approved'; ap.approvedAt = Date.now(); ap.approvedByName = st ? st.name : '';
         ap.approvalSeenBy = [];
         plines.forEach(function (l) {
           var it = itemById(l.itemId);
           if (!it) return;
-          Object.keys(l.alloc).forEach(function (b) { S.addStock(it, b, l.alloc[b]); });
-          // update item cost to latest purchase cost if provided
+          var bt = l.batchId ? S.batchById(it, l.batchId) : null;
+          if (!bt) bt = S.createBatch(it, { cost: Number(l.cost) || 0, purchaseId: ap.id, purchaseNo: ap.no, supplierId: ap.supplierId || '', created: Date.now() });
+          else bt.cost = r2(Number(l.cost) || 0);
+          l.batchId = bt.id;
+          Object.keys(l.alloc).forEach(function (b) { S.addStock(it, b, l.alloc[b], { batchId: bt.id }); });
           if (Number(l.cost) > 0) it.cost = r2(Number(l.cost) || 0);
         });
+        ap.lines = plines;
         logActivity('Approved purchase ' + ap.no + ' (' + money(ptotalA) + ')', 'purchase');
         pDraft = null;
         save(); closeModal(); render();
@@ -10302,20 +10382,25 @@
       var pmethod = ppays.map(function (pm) { return pm.method; })
         .filter(function (m, i3, arr) { return arr.indexOf(m) === i3; }).join(' + ') || 'Credit';
       var purNo = nextDocNo('purchase');
+      var purchaseId = uid();
+      plines.forEach(function (l) {
+        var it = itemById(l.itemId);
+        if (!it) return;
+        var bt = l.batchId ? S.batchById(it, l.batchId) : null;
+        if (!bt) bt = S.createBatch(it, { cost: Number(l.cost) || 0, purchaseId: purchaseId, purchaseNo: purNo, supplierId: pDraft.supplierId || '', created: Date.now() });
+        else bt.cost = r2(Number(l.cost) || 0);
+        l.batchId = bt.id;
+        Object.keys(l.alloc).forEach(function (b) { S.addStock(it, b, l.alloc[b], { batchId: bt.id }); });
+        if (Number(l.cost) > 0) it.cost = r2(Number(l.cost) || 0);
+      });
       db.purchases.push({
-        id: uid(), no: purNo, invoiceNo: String(pDraft.invoiceNo || '').trim(),
+        id: purchaseId, no: purNo, invoiceNo: String(pDraft.invoiceNo || '').trim(),
         date: pDraft.date || today(), created: Date.now(), supplierId: pDraft.supplierId,
         method: pmethod, payments: ppays, paid: ppaid, due: r2(Math.max(0, ptotal - ppaid)),
         subtotal: psub, discount: pdisc, shipping: pship, total: r2(ptotal),
         note: String(pDraft.note || ''), lines: plines,
         byName: st ? st.name : '', createdById: st ? st.id : '', createdByRole: st ? st.role : '',
         status: 'approved'
-      });
-      plines.forEach(function (l) {
-        var it = itemById(l.itemId);
-        if (!it) return;
-        Object.keys(l.alloc).forEach(function (b) { S.addStock(it, b, l.alloc[b]); });
-        if (Number(l.cost) > 0) it.cost = r2(Number(l.cost) || 0);
       });
       logActivity('Recorded purchase ' + purNo + ' (' + money(ptotal) + ')', 'purchase');
       pDraft = null;
@@ -10349,7 +10434,7 @@
       inv.lines.forEach(function (l, i) {
         var rem = Math.max(0, Number(l.qty) - returnedQty(inv.id, l.itemId));
         var q = Math.min(rem, Math.max(0, Math.floor(Number(data['ret_' + i]) || 0)));
-        if (q > 0) { slines.push({ itemId: l.itemId, name: l.name, qty: q, price: l.price }); stotal += q * l.price; }
+        if (q > 0) { slines.push({ itemId: l.itemId, name: l.name, qty: q, price: l.price, cost: l.cost, batchId: l.batchId || '' }); stotal += q * l.price; }
       });
       if (!slines.length) return toast('Enter a quantity to return');
       var srNo = nextDocNo('sreturn');
@@ -10361,7 +10446,7 @@
       });
       slines.forEach(function (l) {
         var it = itemById(l.itemId);
-        if (it) S.addStock(it, inv.branchId, l.qty);
+        if (it) S.addStock(it, inv.branchId, l.qty, { batchId: l.batchId || '' });
       });
       save(); closeModal(); render(); return toast('Return saved — stock back in ' + branchName(inv.branchId));
     }
@@ -10493,17 +10578,22 @@
       var ndesc = String(data.desc || '').trim();
       var nimei = String(data.imei || '').trim();
       var nserial = String(data.serial || '').trim();
+      var line = ui.bill.lines[idx];
+      var newBatchId = String(data.batchId || '');
+      var it = itemById(line.itemId);
+      var newBt = (it && newBatchId) ? S.batchById(it, newBatchId) : null;
       if (ui.bill.kind !== 'estimate') {
         var brId = billBranchId();
-        var next = ui.bill.lines.map(function (l, i) { return { itemId: l.itemId, qty: i === idx ? nq : l.qty }; });
+        var next = ui.bill.lines.map(function (l, i) { return { itemId: l.itemId, batchId: i === idx ? newBatchId : l.batchId, qty: i === idx ? nq : l.qty }; });
         var over = stockOverLines(next, brId);
         if (over.length && !allowOversell(over, brId)) return;
       }
-      ui.bill.lines[idx].qty = nq;
-      ui.bill.lines[idx].disc = ndisc;
-      ui.bill.lines[idx].desc = ndesc;
-      ui.bill.lines[idx].imei = nimei;
-      ui.bill.lines[idx].serial = nserial;
+      line.qty = nq;
+      line.disc = ndisc;
+      line.desc = ndesc;
+      line.imei = nimei;
+      line.serial = nserial;
+      if (newBt) { line.batchId = newBt.id; line.batchNo = newBt.label || ('Batch ' + newBt.no); line.cost = r2(Number(newBt.cost) || 0); }
       closeModal(); render(); return;
     }
 

@@ -428,6 +428,30 @@ window.Store = (function () {
         obj.branches.forEach(function (b) { it.stock[b.id] = 0; });
         it.stock[obj.branches[0].id] = flat;
       }
+      // Batch system: each purchase creates a batch with its own cost.
+      // Older items without batches get a single legacy batch so stock/cost stay consistent.
+      if (!Array.isArray(it.batches)) {
+        it.batches = [];
+        var hasStock = obj.branches.some(function (b) { return (Number(it.stock[b.id]) || 0) > 0; });
+        var legacyCost = r2(Number(it.cost) || 0);
+        if (hasStock) {
+          var bstock = {};
+          obj.branches.forEach(function (b) { bstock[b.id] = r2(Math.max(0, Number(it.stock[b.id]) || 0)); });
+          it.batches.push({
+            id: uid(), no: 1, label: 'Batch 1', cost: legacyCost,
+            created: Number(it.created) || Date.now(), purchaseId: '', purchaseNo: '', supplierId: '',
+            stock: bstock
+          });
+        }
+      }
+      // Keep item.stock in sync with batches when batches exist.
+      if (it.batches.length) {
+        obj.branches.forEach(function (b) {
+          var s = 0;
+          it.batches.forEach(function (bt) { s += Number(bt.stock && bt.stock[b.id]) || 0; });
+          it.stock[b.id] = r2(s);
+        });
+      }
       obj.branches.forEach(function (b) { if (it.stock[b.id] == null) it.stock[b.id] = 0; });
     });
     obj.staff.forEach(function (s) {
@@ -718,20 +742,145 @@ window.Store = (function () {
     return list.length ? list : db.branches.filter(function (b) { return b.id === myBranchId(); });
   }
 
-  /* ------------------------------------------------------------------- stock */
+  /* ------------------------------------------------------------------- stock / batches */
+  function itemBatches(item) {
+    if (!item) return [];
+    if (!Array.isArray(item.batches)) item.batches = [];
+    return item.batches;
+  }
+  function batchStock(bt, branchId) {
+    if (!bt || !bt.stock) return 0;
+    return r2(Number(bt.stock[branchId]) || 0);
+  }
+  function batchTotalStock(bt) {
+    var t = 0;
+    if (!bt || !bt.stock) return 0;
+    db.branches.forEach(function (b) { t += Math.max(0, Number(bt.stock[b.id]) || 0); });
+    return r2(t);
+  }
+  function syncItemStock(item) {
+    if (!item) return;
+    if (!item.stock || typeof item.stock !== 'object') item.stock = {};
+    var batches = Array.isArray(item.batches) ? item.batches : [];
+    if (batches.length) {
+      db.branches.forEach(function (b) {
+        var s = 0;
+        batches.forEach(function (bt) { s += Number(bt.stock && bt.stock[b.id]) || 0; });
+        item.stock[b.id] = Math.max(0, r2(s));
+      });
+    } else {
+      db.branches.forEach(function (b) { if (item.stock[b.id] == null) item.stock[b.id] = 0; });
+    }
+  }
+  function nextBatchNo(item) {
+    var max = 0;
+    itemBatches(item).forEach(function (bt) {
+      var n = Number(bt.no) || 0;
+      if (n > max) max = n;
+    });
+    return max + 1;
+  }
+  function ensureLegacyBatch(item) {
+    if (!item) return null;
+    var batches = itemBatches(item);
+    if (batches.length) return batches[0];
+    var hasStock = db.branches.some(function (b) { return (Number(item.stock && item.stock[b.id]) || 0) > 0; });
+    var cost = r2(Number(item.cost) || 0);
+    if (!hasStock) return null;
+    var bstock = {};
+    db.branches.forEach(function (b) { bstock[b.id] = r2(Math.max(0, Number(item.stock && item.stock[b.id]) || 0)); });
+    var bt = { id: uid(), no: 1, label: 'Batch 1', cost: cost, created: Date.now(), purchaseId: '', purchaseNo: '', supplierId: '', stock: bstock };
+    batches.push(bt);
+    syncItemStock(item);
+    return bt;
+  }
+  function createBatch(item, opts) {
+    opts = opts || {};
+    ensureLegacyBatch(item);
+    var batches = itemBatches(item);
+    var no = nextBatchNo(item);
+    var bt = {
+      id: uid(),
+      no: no,
+      label: 'Batch ' + no,
+      cost: r2(Math.max(0, Number(opts.cost) || 0)),
+      created: opts.created || Date.now(),
+      purchaseId: opts.purchaseId || '',
+      purchaseNo: opts.purchaseNo || '',
+      supplierId: opts.supplierId || '',
+      stock: {}
+    };
+    db.branches.forEach(function (b) { bt.stock[b.id] = 0; });
+    batches.push(bt);
+    return bt;
+  }
+  function batchById(item, batchId) {
+    if (!item || !batchId) return null;
+    var batches = itemBatches(item);
+    for (var i = 0; i < batches.length; i++) if (batches[i].id === batchId) return batches[i];
+    return null;
+  }
+  function pickSaleBatch(item, branchId) {
+    var batches = itemBatches(item).filter(function (bt) { return batchStock(bt, branchId) > 0; });
+    if (!batches.length) return null;
+    batches.sort(function (a, b) { return (Number(a.created) || 0) - (Number(b.created) || 0) || (Number(a.no) || 0) - (Number(b.no) || 0); });
+    return batches[0];
+  }
   function stockOf(item, branchId) {
-    if (!item || !item.stock) return 0;
+    if (!item) return 0;
+    if (Array.isArray(item.batches) && item.batches.length) {
+      var s = 0;
+      item.batches.forEach(function (bt) { s += Number(bt.stock && bt.stock[branchId]) || 0; });
+      return Math.max(0, r2(s));
+    }
+    if (!item.stock) return 0;
     return Math.max(0, Number(item.stock[branchId]) || 0);
   }
   function totalStock(item) {
+    if (!item) return 0;
     var t = 0;
-    db.branches.forEach(function (b) { t += Number(item.stock[b.id]) || 0; });
-    return t;
+    db.branches.forEach(function (b) { t += Number(stockOf(item, b.id)) || 0; });
+    return r2(t);
   }
-  function addStock(item, branchId, delta) {
+  function addStock(item, branchId, delta, opts) {
     if (!item) return;
-    if (!item.stock) item.stock = {};
-    item.stock[branchId] = r2((Number(item.stock[branchId]) || 0) + delta);
+    opts = opts || {};
+    if (!item.stock || typeof item.stock !== 'object') item.stock = {};
+    var d = r2(Number(delta) || 0);
+    if (!d) return;
+    var batches = itemBatches(item);
+    var batchId = opts.batchId || '';
+    if (batchId || batches.length) {
+      if (!batches.length) ensureLegacyBatch(item);
+      batches = itemBatches(item);
+      if (d > 0) {
+        var bt = batchId ? batchById(item, batchId) : null;
+        if (!bt) bt = batches[batches.length - 1];
+        if (!bt) bt = createBatch(item, { cost: Number(item.cost) || 0 });
+        if (!bt.stock) bt.stock = {};
+        bt.stock[branchId] = r2((Number(bt.stock[branchId]) || 0) + d);
+      } else {
+        var left = Math.abs(d);
+        var bt0 = batchId ? batchById(item, batchId) : null;
+        var queue = bt0 ? [bt0] : batches.slice().sort(function (a, b) { return (Number(a.created) || 0) - (Number(b.created) || 0) || (Number(a.no) || 0) - (Number(b.no) || 0); });
+        queue.forEach(function (btx) {
+          if (left <= 0) return;
+          var have = Math.max(0, Number(btx.stock && btx.stock[branchId]) || 0);
+          if (!have) return;
+          var take = Math.min(have, left);
+          btx.stock[branchId] = r2(have - take);
+          left = r2(left - take);
+        });
+        /* Oversold: put the remainder on the chosen (or newest) batch so the shortfall stays visible. */
+        if (left > 0) {
+          var last = bt0 || batches[batches.length - 1];
+          if (last) { if (!last.stock) last.stock = {}; last.stock[branchId] = r2((Number(last.stock[branchId]) || 0) - left); }
+        }
+      }
+      syncItemStock(item);
+      return;
+    }
+    item.stock[branchId] = r2((Number(item.stock[branchId]) || 0) + d);
   }
 
   /* --------------------------------------------------------------- transfers */
@@ -749,8 +898,25 @@ window.Store = (function () {
     }
     t.lines.forEach(function (l) {
       var it = db.items.filter(function (x) { return x.id === l.itemId; })[0];
-      addStock(it, t.from, -l.qty);
-      addStock(it, t.to, l.qty);
+      if (!it) return;
+      var left = Number(l.qty) || 0;
+      /* move the stock batch by batch, oldest first, so cost follows the goods */
+      var batches = itemBatches(it).slice().sort(function (a, b) { return (Number(a.created) || 0) - (Number(b.created) || 0) || (Number(a.no) || 0) - (Number(b.no) || 0); });
+      if (!batches.length) { addStock(it, t.from, -left); addStock(it, t.to, left); return; }
+      batches.forEach(function (bt) {
+        if (left <= 0) return;
+        var have = Math.max(0, Number(bt.stock && bt.stock[t.from]) || 0);
+        if (!have) return;
+        var take = Math.min(have, left);
+        addStock(it, t.from, -take, { batchId: bt.id });
+        addStock(it, t.to, take, { batchId: bt.id });
+        left = r2(left - take);
+      });
+      if (left > 0) {
+        var lastB = batches[batches.length - 1];
+        addStock(it, t.from, -left, { batchId: lastB.id });
+        addStock(it, t.to, left, { batchId: lastB.id });
+      }
     });
     var s = currentStaff();
     t.status = 'accepted';
@@ -790,6 +956,9 @@ window.Store = (function () {
     canSeeAllBranches: canSeeAllBranches, canSwitchBranches: canSwitchBranches, visibleBranches: visibleBranches,
     migratePerms: migratePerms, migrateStaffPerms: migrateStaffPerms,
     stockOf: stockOf, totalStock: totalStock, addStock: addStock,
+    itemBatches: itemBatches, batchStock: batchStock, batchTotalStock: batchTotalStock,
+    batchById: batchById, createBatch: createBatch, nextBatchNo: nextBatchNo,
+    ensureLegacyBatch: ensureLegacyBatch, pickSaleBatch: pickSaleBatch, syncItemStock: syncItemStock,
     pendingTransfersFor: pendingTransfersFor,
     acceptTransfer: acceptTransfer, rejectTransfer: rejectTransfer,
     compute: function (lines, discount, taxRate, extraCharges, opts) {
