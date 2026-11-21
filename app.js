@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v146';
+  var APP_VERSION = 'v147';
   var APP_BRANCH = 'newfix1';
 
   var db = null;
@@ -294,6 +294,105 @@
         ${rows || '<div class="empty"><b>Nothing in the bin</b>' + (all.length ? 'No entries match these filters.' : 'Deleted bills, items, parties and other entries will appear here for ' + TRASH_DAYS + ' days.') + '</div>'}
         ${all.length ? '<div class="row-actions" style="margin-top:12px"><button class="btn danger sm" data-act="trash-empty">Empty the bin</button></div>' : ''}
       </div>`;
+  }
+
+  /* ------------------------------------------------------- document numbers
+     A saved counter cannot be trusted on its own: restoring a backup or loading
+     an older cloud copy brings an old counter back, and two phones working
+     offline can mint the same number. So every new number is checked against
+     the numbers already saved, and repeats from older copies are repaired. */
+  var NO_SERIES = {
+    invoice:   { arr: 'invoices',   counter: 'counter',  prefix: '',    start: 1040, label: 'Bill' },
+    estimate:  { arr: 'estimates',  counter: 'ecounter', prefix: 'EST', start: 100,  label: 'Estimate' },
+    purchase:  { arr: 'purchases',  counter: 'pcounter', prefix: 'PUR', start: 200,  label: 'Purchase' },
+    sreturn:   { arr: 'sreturns',   counter: 'rcounter', prefix: 'SR',  start: 300,  label: 'Sales return' },
+    preturn:   { arr: 'preturns',   counter: 'rcounter', prefix: 'PR',  start: 300,  label: 'Purchase return' },
+    transfer:  { arr: 'transfers',  counter: 'tcounter', prefix: 'TRF', start: 100,  label: 'Stock transfer' },
+    complaint: { arr: 'complaints', counter: 'ccomp',    prefix: 'CMP', start: 0,    label: 'Complaint' }
+  };
+  var NO_SERIES_IDS = ['invoice', 'estimate', 'purchase', 'sreturn', 'preturn', 'transfer', 'complaint'];
+
+  function seriesRecords(sid) {
+    var d = NO_SERIES[sid];
+    return (db && d && Array.isArray(db[d.arr])) ? db[d.arr] : [];
+  }
+  function noTailSeq(no) {
+    var m = String(no == null ? '' : no).match(/(\d+)\s*$/);
+    return m ? (Number(m[1]) || 0) : 0;
+  }
+  function seriesPrefix(sid, rec) {
+    if (sid === 'invoice') {
+      var base = String((rec && rec.no) || '').split('-')[0].trim().toUpperCase();
+      if (/^[A-Z]+$/.test(base)) return base;
+      return branchPrefix(rec && rec.branchId).trim().toUpperCase() || 'INV';
+    }
+    return NO_SERIES[sid].prefix;
+  }
+  function maxSeriesSeq(sid) {
+    var max = 0;
+    seriesRecords(sid).forEach(function (r) { max = Math.max(max, noTailSeq(r.no)); });
+    return max;
+  }
+  function docNoTaken(no) {
+    var s = String(no || '').trim();
+    if (!s) return false;
+    return NO_SERIES_IDS.some(function (sid) {
+      return seriesRecords(sid).some(function (r) { return String(r.no || '').trim() === s; });
+    });
+  }
+  /* the next free number in a series; the saved counter moves up to match */
+  function nextDocNo(sid, rec) {
+    var d = NO_SERIES[sid];
+    if (!d) return '';
+    var pref = seriesPrefix(sid, rec || { branchId: ui.branch, no: '' });
+    var seq = Math.max(Number(db[d.counter]) || 0, maxSeriesSeq(sid), Number(d.start) || 0) + 1;
+    var no = pref + '-' + seq;
+    while (docNoTaken(no)) { seq++; no = pref + '-' + seq; }
+    db[d.counter] = Math.max(Number(db[d.counter]) || 0, seq);
+    return no;
+  }
+  /* The oldest record keeps a repeated number (a bill the customer already has
+     is never renamed); the later copies get fresh numbers. */
+  function repairDocNumbers() {
+    if (!db) return [];
+    var used = Object.create(null);
+    NO_SERIES_IDS.forEach(function (sid) {
+      seriesRecords(sid).forEach(function (r) {
+        var n = String(r.no || '').trim();
+        if (n) used[n] = true;
+      });
+    });
+    var renamed = [];
+    NO_SERIES_IDS.forEach(function (sid) {
+      var d = NO_SERIES[sid];
+      var kept = Object.create(null);
+      seriesRecords(sid).slice().sort(function (a, b) {
+        return (Number(a.created) || 0) - (Number(b.created) || 0)
+          || String(a.date || '').localeCompare(String(b.date || ''))
+          || String(a.id || '').localeCompare(String(b.id || ''));
+      }).forEach(function (r) {
+        var no = String(r.no || '').trim();
+        if (no && !kept[no]) { kept[no] = true; return; }
+        var pref = seriesPrefix(sid, r);
+        var seq = Math.max(Number(db[d.counter]) || 0, maxSeriesSeq(sid), Number(d.start) || 0) + 1;
+        var fresh = pref + '-' + seq;
+        while (used[fresh]) { seq++; fresh = pref + '-' + seq; }
+        r.no = fresh;
+        used[fresh] = true;
+        kept[fresh] = true;
+        db[d.counter] = Math.max(Number(db[d.counter]) || 0, seq);
+        renamed.push({ series: sid, label: d.label, id: r.id, from: no, to: fresh });
+      });
+    });
+    if (renamed.length) {
+      /* a complaint quotes its bill number, so keep that in step */
+      (db.complaints || []).forEach(function (c) {
+        if (!c.invoiceId) return;
+        var inv = invById(c.invoiceId);
+        if (inv && inv.no) c.invoiceNo = inv.no;
+      });
+    }
+    return renamed;
   }
 
   /* Writing to the browser can fail (storage full, private mode, blocked site
@@ -906,39 +1005,9 @@
      unique — two devices that billed offline can mint the same number */
   function cloudEnsureUniqueNos() {
     if (!db) return false;
-    var changed = false;
-    var seen = Object.create(null);
-    (db.invoices || []).slice().sort(function (a, b) {
-      return (a.created || 0) - (b.created || 0) || String(a.id || '').localeCompare(String(b.id || ''));
-    }).forEach(function (inv) {
-      var no = String(inv.no || '');
-      if (!no) return;
-      if (!seen[no]) { seen[no] = inv; return; }
-      var pref = branchPrefix(inv.branchId);
-      var seq = nextBillSeq();
-      var nno = pref + '-' + seq;
-      while (db.invoices.some(function (x) { return x !== inv && x.no === nno; })) { seq++; nno = pref + '-' + seq; }
-      inv.no = nno;
-      db.counter = Math.max(Number(db.counter) || 0, seq);
-      seen[nno] = inv;
-      changed = true;
-    });
-    var seenE = Object.create(null);
-    (db.estimates || []).slice().sort(function (a, b) {
-      return (a.created || 0) - (b.created || 0) || String(a.id || '').localeCompare(String(b.id || ''));
-    }).forEach(function (est) {
-      var no = String(est.no || '');
-      if (!no) return;
-      if (!seenE[no]) { seenE[no] = est; return; }
-      var seq = nextEstSeq();
-      var nno = 'EST-' + seq;
-      while ((db.estimates || []).some(function (x) { return x !== est && x.no === nno; })) { seq++; nno = 'EST-' + seq; }
-      est.no = nno;
-      db.ecounter = Math.max(Number(db.ecounter) || 0, seq);
-      seenE[nno] = est;
-      changed = true;
-    });
-    return changed;
+    /* every series, not just bills and estimates: a purchase, return,
+       transfer or complaint repeated from an older cloud copy is repaired too */
+    return repairDocNumbers().length > 0;
   }
 
   /* replace this device's data with the downloaded copy and remember what was
@@ -1262,7 +1331,7 @@
   /* Estimates are quotes. They are numbered on their own series, never touch
      stock, and never appear in invoices, dues, dashboards or reports. */
   function nextEstSeq() {
-    return Math.max(Number(db.ecounter) || 100, 100) + 1;
+    return Math.max(Number(db.ecounter) || 100, 100, maxSeriesSeq('estimate')) + 1;
   }
   function estById(id) {
     return (db.estimates || []).filter(function (x) { return x.id === id; })[0] || null;
@@ -2487,10 +2556,7 @@
     if (paid > t.total + 0.009) return toast('Payments are more than the total');
     var over = stockOverLines(b.lines, ui.branch);
     if (over.length && !allowOversell(over, ui.branch)) return;
-    var seq = nextBillSeq();
-    var invNo = branchPrefix(ui.branch) + '-' + seq;
-    while (db.invoices.some(function (x) { return x.no === invNo; })) { seq++; invNo = branchPrefix(ui.branch) + '-' + seq; }
-    db.counter = seq;
+    var invNo = nextDocNo('invoice', { branchId: ui.branch, no: '' });
     var staff = S.currentStaff();
     var inv = {
       id: uid(), no: invNo,
@@ -2529,10 +2595,7 @@
   function saveEstimate() {
     var b = ui.bill;
     var t = billTotals();
-    var seq = nextEstSeq();
-    var estNo = 'EST-' + seq;
-    while ((db.estimates || []).some(function (x) { return x.no === estNo; })) { seq++; estNo = 'EST-' + seq; }
-    db.ecounter = seq;
+    var estNo = nextDocNo('estimate');
     var staff = S.currentStaff();
     var est = {
       id: uid(), no: estNo,
@@ -5139,9 +5202,7 @@
     var inv = data.invoiceId ? invById(data.invoiceId) : null;
     var cust = inv && inv.customerId ? findCust(inv.customerId) : null;
     var me = S.currentStaff();
-    var n = Number(db.ccomp) || 1;
-    db.ccomp = n + 1;
-    var no = 'CMP-' + n;
+    var no = nextDocNo('complaint');
     db.complaints.push({
       id: uid(), no: no, date: data.date || today(), created: Date.now(),
       branchId: data.branchId || ui.branch,
@@ -9202,9 +9263,9 @@
         }
       }
       var me = S.currentStaff();
-      db.tcounter = (Number(db.tcounter) || 100) + 1;
+      var trfNo = nextDocNo('transfer');
       db.transfers.push({
-        id: uid(), no: 'TRF-' + db.tcounter, date: today(), created: Date.now(),
+        id: uid(), no: trfNo, date: today(), created: Date.now(),
         from: ui.branch, to: tr.to, status: 'pending', note: '',
         lines: tr.lines.map(function (l) { return { itemId: l.itemId, name: l.name, qty: l.qty }; }),
         by: me ? me.id : '', byName: me ? me.name : '', acceptedBy: '', acceptedAt: 0
@@ -9538,6 +9599,7 @@
       if (!confirm('Bring everything back to how it was on ' + fmtDate(pick.day) + '?\n\nBills, stock, parties and expenses saved after that day are replaced by that copy. Staff and shop settings stay as they are now.')) return;
       try {
         db = S.importData(JSON.parse(pick.data));
+        repairDocNumbers();
       } catch (e) { return toast('That copy could not be read'); }
       ui.branch = startBranchId(); newBill(); render();
       save();
@@ -10161,7 +10223,7 @@
       // Non-owner: send for approval (no prices, no stock)
       var approvalRequest = (typeof purchaseApprovalMode === 'function') && purchaseApprovalMode();
       if (approvalRequest) {
-        db.pcounter = (Number(db.pcounter) || 200) + 1;
+        var purNoReq = nextDocNo('purchase');
         var preqLines = plines.map(function (l) {
           return {
             itemId: l.itemId, name: l.name, qty: l.qty, cost: 0, disc: 0,
@@ -10169,7 +10231,7 @@
           };
         });
         db.purchases.push({
-          id: uid(), no: 'PUR-' + db.pcounter, invoiceNo: String(pDraft.invoiceNo || '').trim(),
+          id: uid(), no: purNoReq, invoiceNo: String(pDraft.invoiceNo || '').trim(),
           date: pDraft.date || today(), created: Date.now(), supplierId: pDraft.supplierId,
           method: 'Pending', payments: [], paid: 0, due: 0,
           subtotal: 0, discount: 0, shipping: 0, total: 0,
@@ -10177,7 +10239,7 @@
           byName: st ? st.name : '', createdById: st ? st.id : '', createdByRole: st ? st.role : '',
           status: 'pending', approvalSeenBy: []
         });
-        logActivity('Sent purchase PUR-' + db.pcounter + ' for approval', 'purchase');
+        logActivity('Sent purchase ' + purNoReq + ' for approval', 'purchase');
         pDraft = null;
         save(); closeModal(); render();
         return toast('Purchase sent for approval');
@@ -10193,9 +10255,9 @@
       var ppaid = r2(ppays.reduce(function (s3, pm) { return s3 + pm.amount; }, 0));
       var pmethod = ppays.map(function (pm) { return pm.method; })
         .filter(function (m, i3, arr) { return arr.indexOf(m) === i3; }).join(' + ') || 'Credit';
-      db.pcounter = (Number(db.pcounter) || 200) + 1;
+      var purNo = nextDocNo('purchase');
       db.purchases.push({
-        id: uid(), no: 'PUR-' + db.pcounter, invoiceNo: String(pDraft.invoiceNo || '').trim(),
+        id: uid(), no: purNo, invoiceNo: String(pDraft.invoiceNo || '').trim(),
         date: pDraft.date || today(), created: Date.now(), supplierId: pDraft.supplierId,
         method: pmethod, payments: ppays, paid: ppaid, due: r2(Math.max(0, ptotal - ppaid)),
         subtotal: psub, discount: pdisc, shipping: pship, total: r2(ptotal),
@@ -10209,7 +10271,7 @@
         Object.keys(l.alloc).forEach(function (b) { S.addStock(it, b, l.alloc[b]); });
         if (Number(l.cost) > 0) it.cost = r2(Number(l.cost) || 0);
       });
-      logActivity('Recorded purchase PUR-' + db.pcounter + ' (' + money(ptotal) + ')', 'purchase');
+      logActivity('Recorded purchase ' + purNo + ' (' + money(ptotal) + ')', 'purchase');
       pDraft = null;
       save(); closeModal(); render();
       return toast('Purchase saved — stock added to ' + plines.length + ' item(s)');
@@ -10223,9 +10285,9 @@
       var pb = data.branchId || ui.branch;
       if (S.stockOf(pit, pb) < pqty) return toast('Only ' + S.stockOf(pit, pb) + ' in ' + branchName(pb));
       var pcost = r2(Number(data.cost) || 0) || r2(Number(pit.cost) || 0);
-      db.rcounter = (Number(db.rcounter) || 300) + 1;
+      var prNo = nextDocNo('preturn');
       db.preturns.push({
-        id: uid(), no: 'PR-' + db.rcounter, date: data.date || today(), created: Date.now(),
+        id: uid(), no: prNo, date: data.date || today(), created: Date.now(),
         supplierId: data.supplierId, itemId: pit.id, name: pit.name, qty: pqty, cost: pcost,
         total: r2(pqty * pcost), branchId: pb, note: String(data.note || ''),
         byName: (S.currentStaff() || {}).name || ''
@@ -10244,9 +10306,9 @@
         if (q > 0) { slines.push({ itemId: l.itemId, name: l.name, qty: q, price: l.price }); stotal += q * l.price; }
       });
       if (!slines.length) return toast('Enter a quantity to return');
-      db.rcounter = (Number(db.rcounter) || 300) + 1;
+      var srNo = nextDocNo('sreturn');
       db.sreturns.push({
-        id: uid(), no: 'SR-' + db.rcounter, date: today(), created: Date.now(),
+        id: uid(), no: srNo, date: today(), created: Date.now(),
         invoiceId: inv.id, branchId: inv.branchId, customerId: inv.customerId,
         lines: slines, total: r2(stotal), method: data.method || 'Cash',
         byName: (S.currentStaff() || {}).name || ''
@@ -10917,8 +10979,10 @@
       reader.onload = function () {
         try {
           db = S.importData(JSON.parse(String(reader.result || '{}')));
+          var fixedRestore = repairDocNumbers();
           ui.branch = startBranchId(); newBill(); render();
-          toast('Backup restored');
+          if (fixedRestore.length) S.save();
+          toast(fixedRestore.length ? 'Backup restored — ' + fixedRestore.length + ' repeated number(s) fixed' : 'Backup restored');
         } catch (e) { toast('That file is not a valid backup'); }
       };
       reader.readAsText(file);
@@ -10975,6 +11039,11 @@
 
   function boot() {
     db = S.load();
+    /* older copies can hold repeated numbers; fix them before anything is shown */
+    if (db) {
+      var fixedNos = repairDocNumbers();
+      if (fixedNos.length) { try { S.save(); } catch (e) {} }
+    }
     if (db && db.settings) { try { snapDayDone = captureDailySnapshot() ? today() : today(); } catch (e) {} }
     var ap = (db.settings && db.settings.appearance) || {};
     var mode = ap.mode || S.getTheme() || 'light';
