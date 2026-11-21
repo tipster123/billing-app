@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v147';
+  var APP_VERSION = 'v148';
   var APP_BRANCH = 'newfix1';
 
   var db = null;
@@ -4749,7 +4749,7 @@
     var tr = ui.transfer;
     if (!tr.to || !S.branchById(tr.to)) tr.to = (otherBranches()[0] || {}).id || '';
     var incoming = S.pendingTransfersFor(ui.branch);
-    var history = db.transfers.slice().sort(function (a, b) { return (b.created || 0) - (a.created || 0); });
+    var history = db.transfers.slice().sort(function (a, b) { return (a.created || 0) - (b.created || 0); });
     var single = db.branches.length < 2;
 
     return `
