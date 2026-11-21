@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v151';
+  var APP_VERSION = 'v152';
   var APP_BRANCH = 'newfix1';
 
   var db = null;
@@ -106,6 +106,7 @@
   }
   var snapDayDone = '';
   function save() {
+    costMapCache = null;
     if (S.save()) {
       cloudSchedule();
       if (snapDayDone !== today() && captureDailySnapshot()) snapDayDone = today();
@@ -1608,7 +1609,7 @@
       if (i.branchId !== branchId || i.date < from || i.date > to) return;
       var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i), { roundOff: (typeof i.roundOff === 'number' ? i.roundOff : 0) });
       sales += t.taxable;
-      gross += (t.taxable - t.cost);
+      gross += (t.taxable - invoiceCostBasis(i));
     });
     var exp = db.expenses.filter(function (x) { return x.branchId === branchId && x.date >= from && x.date <= to; })
       .reduce(function (s, x) { return s + Number(x.amount || 0); }, 0);
@@ -1637,9 +1638,50 @@
     });
     return r2(share);
   }
+  /* What one unit of an item cost the shop: the newest purchase price recorded
+     for it, else the batch it was taken from, else the item's cost price.
+     Profit is always worked out from this, never from the cost frozen onto the
+     sale line — that stale snapshot is how a ₹11,500 cupboard with a ₹5,500
+     discount showed ₹5,000 profit on a ₹13,000 sale instead of ₹1,500. */
+  var costMapCache = null;
+  function costMap() {
+    if (costMapCache) return costMapCache;
+    var m = {};
+    (db.purchases || []).forEach(function (p) {
+      if (p.status && p.status !== 'approved') return;
+      var when = String(p.date || '') + '|' + String(p.created || 0) + '|' + String(p.editedAt || 0);
+      (p.lines || []).forEach(function (l) {
+        var c = r2(Number(l.cost) || 0);
+        if (!l.itemId || c <= 0) return;
+        if (!m[l.itemId] || when >= m[l.itemId].when) m[l.itemId] = { when: when, cost: c };
+      });
+    });
+    costMapCache = m;
+    return m;
+  }
+  /* the price paid most recently wins; a batch price and the line's own saved
+     cost are only fallbacks, so an old batch can never undercut the profit */
+  function unitCostOf(line) {
+    if (!line) return 0;
+    var it = line.itemId ? itemById(line.itemId) : null;
+    var m = costMap();
+    if (line.itemId && m[line.itemId]) return m[line.itemId].cost;
+    if (it && line.batchId) {
+      var bt = S.batchById(it, line.batchId);
+      if (bt && Number(bt.cost) > 0) return r2(bt.cost);
+    }
+    if (it && Number(it.cost) > 0) return r2(it.cost);
+    return r2(Number(line.cost) || 0);
+  }
+  function invoiceCostBasis(inv) {
+    if (!inv) return 0;
+    return r2((inv.lines || []).reduce(function (s, l) {
+      return s + (Number(l.qty) || 0) * unitCostOf(l);
+    }, 0));
+  }
   function billProfit(inv) {
     var t = S.compute(inv.lines, inv.discount, inv.taxRate, invoiceCharges(inv), { roundOff: (typeof inv.roundOff === 'number' ? inv.roundOff : 0) });
-    return r2((t.taxable - t.cost) - linkedExpenseShare(inv));
+    return r2((t.taxable - invoiceCostBasis(inv)) - linkedExpenseShare(inv));
   }
   function customerProfit(cid, from, to) {
     var out = { n: 0, sales: 0, linked: 0, profit: 0 };
@@ -1650,7 +1692,7 @@
       var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i), { roundOff: (typeof i.roundOff === 'number' ? i.roundOff : 0) });
       out.n++;
       out.sales += t.taxable;
-      out.profit += (t.taxable - t.cost);
+      out.profit += (t.taxable - invoiceCostBasis(i));
       out.linked += linkedExpenseShare(i);
     });
     out.sales = r2(out.sales);
@@ -2272,7 +2314,7 @@
     }
     return r2(base - qty * (Number(cost) || 0));
   }
-  function lineProfit(l, t) { return lineProfitWith(l, t, l.cost); }
+  function lineProfit(l, t) { return lineProfitWith(l, t, unitCostOf(l)); }
 
   function cartLine(l, i, t) {
     var details = [];
@@ -2280,7 +2322,7 @@
     if (l.desc) details.push(esc(l.desc));
     if (l.imei) details.push('IMEI: ' + esc(l.imei));
     if (l.serial) details.push('Serial: ' + esc(l.serial));
-    if (can('profit.view') && Number(l.cost) > 0) {
+    if (can('profit.view') && unitCostOf(l) > 0) {
       var lp = lineProfit(l, t);
       details.push('Profit ' + money(lp) + (lp < 0 ? ' (loss)' : ''));
     }
@@ -2315,19 +2357,14 @@
     var batches = S.itemBatches(it);
     var showCost = can('profit.view');
     if (!batches.length) return '';
-    var bt2 = billTotals();
     var rows = batches.slice().sort(function (a, b) { return (Number(a.no) || 0) - (Number(b.no) || 0); }).map(function (bt) {
       var have = S.batchStock(bt, brId);
       var mine = (l.batchId || '') === bt.id;
       var label = bt.label || ('Batch ' + bt.no);
-      /* Profit for this line if this batch is picked, so a discount on the bill
-         shows up here too instead of only the raw price less cost. */
-      var pr = lineProfitWith(l, bt2, bt.cost);
       return `<label class="batch-row${mine ? ' sel' : ''}">
         <input type="radio" name="batchId" value="${bt.id}"${mine ? ' checked' : ''}${have > 0 ? '' : ' disabled'}>
         <span class="batch-main"><span class="batch-name">${esc(label)}</span>
           <span class="batch-meta">${have > 0 ? num(have) + ' in ' + esc(branchName(brId)) : 'No stock in ' + esc(branchName(brId))}${showCost ? ' · cost ' + money(bt.cost) : ''}${bt.purchaseNo ? ' · ' + esc(bt.purchaseNo) : ''}</span></span>
-        ${showCost ? `<span class="batch-profit">profit ${money(pr)}</span>` : ''}
       </label>`;
     }).join('');
     return `<div class="field"><label>Batch</label>
@@ -6053,7 +6090,7 @@
     var sales = 0, tax = 0, cost = 0, disc = 0;
     inv.forEach(function (i) {
       var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i), { roundOff: (typeof i.roundOff === 'number' ? i.roundOff : 0) });
-      sales += t.taxable; tax += t.tax; cost += t.cost; disc += t.discount;
+      sales += t.taxable; tax += t.tax; cost += invoiceCostBasis(i); disc += t.discount;
     });
     var gross = r2(sales - cost);
     var exp = scopeExpenses().filter(function (x) { return x.date >= from && x.date <= to; });
@@ -6085,12 +6122,7 @@
       return r2(base - (billDisc * base / afterLine));
     };
     var lineCost = function (l) {
-      var c = Number(l.cost) || 0;
-      if (!c && l.itemId) {
-        var it = itemById(l.itemId);
-        c = (it && Number(it.cost)) || 0;
-      }
-      return r2((Number(l.qty) || 0) * c);
+      return r2((Number(l.qty) || 0) * unitCostOf(l));
     };
 
     var byBillAll = inv.map(function (i) {
@@ -6103,7 +6135,7 @@
     inv.forEach(function (i) {
       var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i), { roundOff: (typeof i.roundOff === 'number' ? i.roundOff : 0) });
       if (!byDay[i.date]) byDay[i.date] = { n: 0, total: 0, profit: 0 };
-      byDay[i.date].n++; byDay[i.date].total += i.total; byDay[i.date].profit += (t.taxable - t.cost);
+      byDay[i.date].n++; byDay[i.date].total += i.total; byDay[i.date].profit += (t.taxable - invoiceCostBasis(i));
     });
     var days = Object.keys(byDay).sort().reverse();
 
@@ -6112,10 +6144,11 @@
       var t = S.compute(i.lines, i.discount, i.taxRate, invoiceCharges(i), { roundOff: (typeof i.roundOff === 'number' ? i.roundOff : 0) });
       i.lines.forEach(function (l) {
         var k = l.itemId || l.name;
-        if (!byItem[k]) byItem[k] = { name: l.name, qty: 0, revenue: 0, profit: 0 };
+        if (!byItem[k]) byItem[k] = { name: l.name, qty: 0, revenue: 0, profit: 0, cost: 0 };
         var sale = lineSale(t, l);
         byItem[k].qty += Number(l.qty) || 0;
         byItem[k].revenue += sale;
+        byItem[k].cost += lineCost(l);
         byItem[k].profit += sale - lineCost(l);
       });
     });
@@ -6288,7 +6321,7 @@
       }).join(''), 'Nothing stuck — everything in stock is moving.')}
 
       ${showProfit ? secHead('Profit by item', byProfitAll.length > 5 ? byProfitAll.length + ' items' : '') + list(byProfit.map(function (t) {
-        return row(t.name, num(t.qty) + ' sold · ' + money(t.revenue), money(t.profit), t.profit < 0 ? 'bad' : 'ok');
+        return row(t.name, num(t.qty) + ' sold · ' + money(t.revenue) + (t.cost > 0 ? ' · cost ' + money(t.cost) : ''), money(t.profit), t.profit < 0 ? 'bad' : 'ok');
       }).join(''), 'No sales in this range.') + moreBtn('items', byProfitAll.length, 5) : ''}
 
       ${showProfit ? secHead('Profit by category', catAll.length > 5 ? catAll.length + ' categories' : '') + list(catRows.map(function (t) {
