@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v155';
+  var APP_VERSION = 'v156';
   var APP_BRANCH = 'newfix1';
 
   var db = null;
@@ -1513,7 +1513,6 @@
         }
       }
     }
-    $('#pageTitle').textContent = (ui.tab === 'bill' && ui.bill && ui.bill.editId) ? 'Edit bill ' + ui.bill.editNo : tab.title;
     var topBranch = $('#topBranch');
     if (topBranch) {
       topBranch.textContent = branchName(ui.branch);
