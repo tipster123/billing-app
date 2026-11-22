@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v156';
+  var APP_VERSION = 'v157';
   var APP_BRANCH = 'newfix1';
 
   var db = null;
@@ -9897,112 +9897,100 @@
   }
 
   function eodReportHtml(d) {
+    var th = 'text-align:left;padding:8px 6px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#6b7280;font-weight:600';
+    var thR = 'text-align:right;padding:8px 6px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#6b7280;font-weight:600';
+    var td = 'padding:8px 6px;border-bottom:1px solid #f3f4f6;vertical-align:top';
+    var tdR = 'padding:8px 6px;border-bottom:1px solid #f3f4f6;text-align:right;vertical-align:top';
     var invRows = d.rows.length ? d.rows.map(function (r) {
-      return '<tr><td><b>' + esc(r.no) + '</b></td><td>' + esc(r.cust) + '</td><td>' + esc(r.prod) + '</td>' +
-        '<td class="num">' + num(r.qty) + '</td><td class="num">' + money(r.recv) + '</td>' +
-        '<td style="padding:5px 4px;font-size:10px;color:#374151">' + esc(r.mix) + '</td>' +
-        '<td class="num">' + money(r.cash) + '</td><td class="num">' + money(r.online) + '</td></tr>';
-    }).join('') + '<tr style="font-weight:700;background:#f8fafc"><td colspan="3">Total (' + d.rows.length + ' bills)</td>' +
-      '<td class="num">' + num(d.totQty) + '</td><td class="num">' + money(d.totRecv) + '</td><td></td>' +
-      '<td class="num">' + money(d.totCash) + '</td><td class="num">' + money(d.totOnline) + '</td></tr>'
-      : '<tr><td colspan="8" class="sub">No invoices today.</td></tr>';
-    var methodRows = (d.byMethod || []).length
-      ? '<div style="margin-top:12px"><div style="font-weight:700;margin:0 0 5px;font-size:13px">Collected by method</div>' +
-        '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
-        d.byMethod.map(function (m) {
-          return '<tr><td style="padding:4px 4px;border-bottom:1px solid #f1f5f9">' + esc(m.method) + '</td>' +
-            '<td style="padding:4px 4px;border-bottom:1px solid #f1f5f9;text-align:right;font-weight:700">' + money(m.amount) + '</td></tr>';
-        }).join('') +
-        '</table></div>'
-      : '';
+      return '<tr><td style="' + td + '"><div style="font-weight:600">' + esc(r.no) + '</div><div style="color:#6b7280;font-size:11px;margin-top:2px">' + esc(r.cust) + '</div></td>' +
+        '<td style="' + td + '">' + esc(r.prod) + '</td>' +
+        '<td style="' + tdR + '">' + num(r.qty) + '</td>' +
+        '<td style="' + tdR + '">' + money(r.recv) + '</td>' +
+        '<td style="' + td + ';color:#6b7280;font-size:11px">' + esc(r.mix) + '</td></tr>';
+    }).join('') : '<tr><td colspan="5" style="' + td + ';color:#9ca3af">No invoices today.</td></tr>';
     var expRows = d.exps.length ? d.exps.map(function (e) {
-      return '<tr><td>' + esc(e.cat) + '</td><td>' + esc(e.note || '—') + '</td><td>' + esc(e.method || '—') + '</td><td class="num">' + money(e.amt) + '</td><td class="num">' + money(e.paid) + '</td><td class="num">' + (e.bal > 0.009 ? money(e.bal) : '—') + '</td></tr>';
-    }).join('') + '<tr style="font-weight:700;background:#f8fafc"><td colspan="3">Total expense</td><td class="num">' + money(d.totExp) + '</td><td class="num">' + money(d.totExpPaid) + '</td><td class="num">' + (d.totExpBal > 0.009 ? money(d.totExpBal) : '—') + '</td></tr>'
-      : '<tr><td colspan="6" class="sub">No expenses today.</td></tr>';
-    return '<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#111827;padding:18px 18px 22px;font-size:12px;line-height:1.35">' +
-      '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">' +
-        '<div><div style="font-size:18px;font-weight:700">End of Day Report</div><div style="color:#6b7280;margin-top:2px">' + esc(d.branch) + ' · ' + esc(fmtDate(d.date)) + '</div></div>' +
-        '<div style="text-align:right;color:#6b7280;font-size:11px">Generated ' + esc(fmtDate(d.date)) + '</div></div>' +
-      '<div style="font-weight:700;margin:8px 0 6px;font-size:13px">Today\'s invoices</div>' +
-      '<table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr>' +
-        '<th style="text-align:left;border-bottom:1px solid #e5e7eb;padding:6px 4px">Invoice</th>' +
-        '<th style="text-align:left;border-bottom:1px solid #e5e7eb;padding:6px 4px">Customer</th>' +
-        '<th style="text-align:left;border-bottom:1px solid #e5e7eb;padding:6px 4px">Product</th>' +
-        '<th style="text-align:right;border-bottom:1px solid #e5e7eb;padding:6px 4px">Qty</th>' +
-        '<th style="text-align:right;border-bottom:1px solid #e5e7eb;padding:6px 4px">Received</th>' +
-        '<th style="text-align:left;border-bottom:1px solid #e5e7eb;padding:6px 4px">Payments</th>' +
-        '<th style="text-align:right;border-bottom:1px solid #e5e7eb;padding:6px 4px">Cash</th>' +
-        '<th style="text-align:right;border-bottom:1px solid #e5e7eb;padding:6px 4px">Online</th>' +
-      '</tr></thead><tbody>' + invRows.replace(/class="num"/g, 'style="text-align:right;border-bottom:1px solid #f1f5f9;padding:5px 4px"').replace(/<td><b>/g,'<td style="border-bottom:1px solid #f1f5f9;padding:5px 4px"><b>').replace(/<td>/g,'<td style="border-bottom:1px solid #f1f5f9;padding:5px 4px">').replace(/<td colspan/g,'<td style="border-bottom:1px solid #f1f5f9;padding:5px 4px;color:#6b7280" colspan') + '</tbody></table>' +
-      '<div style="font-weight:700;margin:14px 0 6px;font-size:13px">Today\'s expenses</div>' +
-      '<table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr>' +
-        '<th style="text-align:left;border-bottom:1px solid #e5e7eb;padding:6px 4px">Category</th>' +
-        '<th style="text-align:left;border-bottom:1px solid #e5e7eb;padding:6px 4px">Note</th>' +
-        '<th style="text-align:left;border-bottom:1px solid #e5e7eb;padding:6px 4px">Method</th>' +
-        '<th style="text-align:right;border-bottom:1px solid #e5e7eb;padding:6px 4px">Amount</th>' +
-        '<th style="text-align:right;border-bottom:1px solid #e5e7eb;padding:6px 4px">Paid</th>' +
-        '<th style="text-align:right;border-bottom:1px solid #e5e7eb;padding:6px 4px">Balance</th>' +
-      '</tr></thead><tbody>' + expRows.replace(/class="num"/g, 'style="text-align:right;border-bottom:1px solid #f1f5f9;padding:5px 4px"').replace(/<td>/g,'<td style="border-bottom:1px solid #f1f5f9;padding:5px 4px">').replace(/<td colspan/g,'<td style="border-bottom:1px solid #f1f5f9;padding:5px 4px;color:#6b7280" colspan') + '</tbody></table>' +
-      methodRows +
-      '<div style="margin-top:16px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">' +
-        '<div style="padding:14px 16px;background:#ecfdf5;border:2px solid #10b981;border-radius:10px"><span style="color:#065f46;font-size:14px;font-weight:800">Cash received</span><br><b style="font-size:40px;line-height:1.05;display:inline-block;margin-top:6px;color:#047857">' + money(d.totCash) + '</b></div>' +
-        '<div style="padding:14px 16px;background:#eff6ff;border:2px solid #3b82f6;border-radius:10px"><span style="color:#1e3a8a;font-size:14px;font-weight:800">Online received</span><br><b style="font-size:40px;line-height:1.05;display:inline-block;margin-top:6px;color:#1d4ed8">' + money(d.totOnline) + '</b></div>' +
-        '<div style="padding:14px 16px;background:#f5f3ff;border:2px solid #8b5cf6;border-radius:10px"><span style="color:#4c1d95;font-size:14px;font-weight:800">Total received</span><br><b style="font-size:40px;line-height:1.05;display:inline-block;margin-top:6px;color:#6d28d9">' + money(d.totRecv) + '</b></div>' +
-        '<div style="padding:14px 16px;background:#fef2f2;border:2px solid #ef4444;border-radius:10px"><span style="color:#7f1d1d;font-size:14px;font-weight:800">Total expense</span><br><b style="font-size:40px;line-height:1.05;display:inline-block;margin-top:6px;color:#b91c1c">' + money(d.totExp) + '</b></div>' +
+      return '<tr><td style="' + td + '"><div style="font-weight:600">' + esc(e.cat) + '</div><div style="color:#6b7280;font-size:11px;margin-top:2px">' + esc(e.note || '—') + '</div></td>' +
+        '<td style="' + td + '">' + esc(e.method || '—') + '</td>' +
+        '<td style="' + tdR + '">' + money(e.amt) + '</td></tr>';
+    }).join('') : '<tr><td colspan="3" style="' + td + ';color:#9ca3af">No expenses today.</td></tr>';
+    var methodRows = (d.byMethod || []).length ? '<div style="margin-top:20px"><div style="font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">By payment method</div>' +
+      d.byMethod.map(function (m) {
+        return '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f3f4f6;font-size:12px"><span style="color:#374151">' + esc(m.method) + '</span><span style="font-weight:600">' + money(m.amount) + '</span></div>';
+      }).join('') + '</div>' : '';
+    return '<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#111827;padding:28px 24px 32px;font-size:12px;line-height:1.4;background:#fff">' +
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid #e5e7eb">' +
+        '<div><div style="font-size:20px;font-weight:600;letter-spacing:-.01em">End of day</div><div style="color:#6b7280;margin-top:4px;font-size:12px">' + esc(d.branch) + ' · ' + esc(fmtDate(d.date)) + '</div></div>' +
       '</div>' +
-      '<div style="margin-top:12px;padding:18px 20px;background:#fff7ed;border:3px solid #f59e0b;border-radius:10px">' +
-        '<span style="color:#92400e;font-size:16px;font-weight:900">Final Total Cash in Hand</span><br>' +
-        '<b style="font-size:56px;line-height:1.05;display:inline-block;margin-top:8px;color:#b45309">' + money(d.cashInHand) + '</b>' +
-        '<div style="margin-top:6px;color:#92400e;font-size:13px">Cash received minus cash expenses</div>' +
-      '</div></div>';
+      '<div style="margin-bottom:24px;padding:20px 0;border-bottom:1px solid #e5e7eb">' +
+        '<div style="font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.04em">Cash in hand</div>' +
+        '<div style="font-size:36px;font-weight:600;letter-spacing:-.02em;margin-top:6px;color:#111827">' + money(d.cashInHand) + '</div>' +
+        '<div style="color:#6b7280;font-size:12px;margin-top:6px">Cash received ' + money(d.totCash) + ' − cash expenses ' + money(d.cashExp) + '</div>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-bottom:24px">' +
+        '<div><div style="font-size:11px;color:#6b7280;margin-bottom:4px">Total received</div><div style="font-size:15px;font-weight:600">' + money(d.totRecv) + '</div></div>' +
+        '<div><div style="font-size:11px;color:#6b7280;margin-bottom:4px">Online received</div><div style="font-size:15px;font-weight:600">' + money(d.totOnline) + '</div></div>' +
+        '<div><div style="font-size:11px;color:#6b7280;margin-bottom:4px">Expenses</div><div style="font-size:15px;font-weight:600">' + money(d.totExp) + '</div></div>' +
+        '<div><div style="font-size:11px;color:#6b7280;margin-bottom:4px">Bills / Qty</div><div style="font-size:15px;font-weight:600">' + d.rows.length + ' / ' + num(d.totQty) + '</div></div>' +
+      '</div>' +
+      methodRows +
+      '<div style="margin-top:24px"><div style="font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Invoices</div>' +
+      '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>' +
+        '<th style="' + th + '">Invoice</th><th style="' + th + '">Items</th><th style="' + thR + '">Qty</th><th style="' + thR + '">Received</th><th style="' + th + '">Payment</th>' +
+      '</tr></thead><tbody>' + invRows + '</tbody></table></div>' +
+      '<div style="margin-top:24px"><div style="font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Expenses</div>' +
+      '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>' +
+        '<th style="' + th + '">Category</th><th style="' + th + '">Method</th><th style="' + thR + '">Amount</th>' +
+      '</tr></thead><tbody>' + expRows + '</tbody></table></div>' +
+    '</div>';
   }
 
   function eodModalHtml(d) {
     var invRows = d.rows.length ? d.rows.map(function (r) {
-      return '<tr><td style="padding:4px 6px"><b>' + esc(r.no) + '</b><div class="sub" style="font-size:10px;margin-top:1px">' + esc(r.cust) + '</div></td>' +
-        '<td style="padding:4px 6px">' + esc(r.prod) + '</td><td class="num" style="padding:4px 6px">' + num(r.qty) + '</td>' +
-        '<td class="num" style="padding:4px 6px">' + money(r.recv) + '</td>' +
-        '<td style="padding:4px 6px;font-size:10px;color:#4b5563">' + esc(r.mix) + '</td>' +
-        '<td class="num" style="padding:4px 6px">' + money(r.cash) + '</td><td class="num" style="padding:4px 6px">' + money(r.online) + '</td></tr>';
-    }).join('') : '<tr><td colspan="7" class="sub" style="padding:6px">No invoices today.</td></tr>';
-    var methodList = (d.byMethod || []).length
-      ? '<div class="kpi eod-methods" style="padding:8px 10px"><div class="k">Collected by method</div>' +
-        d.byMethod.map(function (m) {
-          return '<div class="row-between" style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:2px 0">' +
-            '<span>' + esc(m.method) + '</span><b>' + money(m.amount) + '</b></div>';
-        }).join('') + '</div>'
-      : '';
+      return '<tr><td><div class="eod-cell-main">' + esc(r.no) + '</div><div class="eod-cell-sub">' + esc(r.cust) + '</div></td>' +
+        '<td class="eod-cell-sub">' + esc(r.prod) + '</td>' +
+        '<td class="num">' + num(r.qty) + '</td>' +
+        '<td class="num">' + money(r.recv) + '</td>' +
+        '<td class="eod-cell-sub">' + esc(r.mix) + '</td></tr>';
+    }).join('') : '<tr><td colspan="5" class="eod-empty">No invoices today</td></tr>';
     var expRows = d.exps.length ? d.exps.map(function (e) {
-      return '<tr><td style="padding:4px 6px"><b>' + esc(e.cat) + '</b><div class="sub" style="font-size:10px;margin-top:1px">' + esc(e.note || '—') + '</div></td><td style="padding:4px 6px">' + esc(e.method || '—') + '</td><td class="num" style="padding:4px 6px">' + money(e.amt) + '</td><td class="num" style="padding:4px 6px">' + money(e.paid) + '</td><td class="num" style="padding:4px 6px">' + (e.bal > 0.009 ? money(e.bal) : '—') + '</td></tr>';
-    }).join('') : '<tr><td colspan="5" class="sub" style="padding:6px">No expenses today.</td></tr>';
-    return '<div class="eod" style="display:flex;flex-direction:column;gap:8px">' +
-      '<div class="row-actions eod-top" style="justify-content:space-between;align-items:center;gap:8px">' +
-        '<div class="sub">' + esc(d.branch) + ' · ' + esc(fmtDate(d.date)) + '</div>' +
+      return '<tr><td><div class="eod-cell-main">' + esc(e.cat) + '</div><div class="eod-cell-sub">' + esc(e.note || '—') + '</div></td>' +
+        '<td class="eod-cell-sub">' + esc(e.method || '—') + '</td>' +
+        '<td class="num">' + money(e.amt) + '</td></tr>';
+    }).join('') : '<tr><td colspan="3" class="eod-empty">No expenses today</td></tr>';
+    var methodList = (d.byMethod || []).length
+      ? '<div class="eod-section"><div class="eod-section-title">By payment method</div><div class="eod-methods">' +
+        d.byMethod.map(function (m) {
+          return '<div class="eod-method-row"><span>' + esc(m.method) + '</span><span>' + money(m.amount) + '</span></div>';
+        }).join('') + '</div></div>'
+      : '';
+    return '<div class="eod">' +
+      '<div class="eod-head">' +
+        '<div class="eod-head-meta">' + esc(d.branch) + ' · ' + esc(fmtDate(d.date)) + '</div>' +
         '<button class="btn sm primary" data-act="eod-wa">Share on WhatsApp</button>' +
       '</div>' +
-      '<div class="kpi-grid eod-kpis" style="grid-template-columns:repeat(2,minmax(0,1fr));gap:6px">' +
-        '<div class="kpi eod-kpi" style="padding:8px 10px"><div class="k">Cash received</div><div class="v" style="font-size:17px">' + money(d.totCash) + '</div></div>' +
-        '<div class="kpi eod-kpi" style="padding:8px 10px"><div class="k">Online received</div><div class="v" style="font-size:17px">' + money(d.totOnline) + '</div></div>' +
-        '<div class="kpi eod-kpi" style="padding:8px 10px"><div class="k">Total received</div><div class="v" style="font-size:17px">' + money(d.totRecv) + '</div></div>' +
-        '<div class="kpi eod-kpi" style="padding:8px 10px"><div class="k">Total expense</div><div class="v bad" style="font-size:17px">' + money(d.totExp) + '</div></div>' +
+      '<div class="eod-hero">' +
+        '<div class="eod-hero-label">Cash in hand</div>' +
+        '<div class="eod-hero-value">' + money(d.cashInHand) + '</div>' +
+        '<div class="eod-hero-sub">Cash received ' + money(d.totCash) + ' − cash expenses ' + money(d.cashExp) + '</div>' +
       '</div>' +
-      '<div class="kpi eod-cash" style="padding:8px 10px">' +
-        '<div class="k">Final Total Cash in Hand</div>' +
-        '<div class="v" style="font-size:20px;font-weight:800">' + money(d.cashInHand) + '</div>' +
-        '<div class="sub">Cash received minus cash expenses</div>' +
+      '<div class="eod-stats">' +
+        '<div class="eod-stat"><div class="eod-stat-k">Total received</div><div class="eod-stat-v">' + money(d.totRecv) + '</div></div>' +
+        '<div class="eod-stat"><div class="eod-stat-k">Online received</div><div class="eod-stat-v">' + money(d.totOnline) + '</div></div>' +
+        '<div class="eod-stat"><div class="eod-stat-k">Expenses</div><div class="eod-stat-v">' + money(d.totExp) + '</div></div>' +
+        '<div class="eod-stat"><div class="eod-stat-k">Bills / Qty</div><div class="eod-stat-v">' + d.rows.length + ' / ' + num(d.totQty) + '</div></div>' +
       '</div>' +
       methodList +
-      '<div class="section-title eod-title" style="margin:0;font-size:11px">Today\'s invoices</div>' +
-      '<div class="table-wrap eod-table" style="margin:0"><table class="data" style="font-size:11px;line-height:1.25"><thead><tr><th style="padding:4px 6px">Invoice / Customer</th><th style="padding:4px 6px">Product</th><th class="num" style="padding:4px 6px">Qty</th><th class="num" style="padding:4px 6px">Received</th><th style="padding:4px 6px">Payments</th><th class="num" style="padding:4px 6px">Cash</th><th class="num" style="padding:4px 6px">Online</th></tr></thead><tbody>' + invRows + '</tbody></table></div>' +
-      '<div class="section-title eod-title" style="margin:0;font-size:11px">Today\'s expenses</div>' +
-      '<div class="table-wrap eod-table" style="margin:0"><table class="data" style="font-size:11px;line-height:1.25"><thead><tr><th style="padding:4px 6px">Category / Note</th><th style="padding:4px 6px">Method</th><th class="num" style="padding:4px 6px">Amount</th><th class="num" style="padding:4px 6px">Paid</th><th class="num" style="padding:4px 6px">Balance</th></tr></thead><tbody>' + expRows + '</tbody></table></div>' +
+      '<div class="eod-section"><div class="eod-section-title">Invoices</div>' +
+        '<div class="table-wrap eod-table"><table class="data"><thead><tr><th>Invoice</th><th>Items</th><th class="num">Qty</th><th class="num">Received</th><th>Payment</th></tr></thead><tbody>' + invRows + '</tbody></table></div></div>' +
+      '<div class="eod-section"><div class="eod-section-title">Expenses</div>' +
+        '<div class="table-wrap eod-table"><table class="data"><thead><tr><th>Category</th><th>Method</th><th class="num">Amount</th></tr></thead><tbody>' + expRows + '</tbody></table></div></div>' +
     '</div>';
   }
 
   function openEodReport() {
     eodPdfCache = null;
     var d = eodData();
-    openModal('EOD Report', eodModalHtml(d));
+    openModal('End of day', eodModalHtml(d));
   }
 
   function buildEodCanvas() {
