@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v153';
+  var APP_VERSION = 'v154';
   var APP_BRANCH = 'newfix1';
 
   var db = null;
@@ -1793,7 +1793,7 @@
     var expMonth = branchExpenses().filter(function (x) { return x.date >= S.monthStart(); })
       .reduce(function (s, x) { return s + Number(x.amount || 0); }, 0);
     var unpaid = inv.reduce(function (s, i) { return s + Math.max(0, i.total - i.paid); }, 0);
-    var low = db.items.filter(function (it) { return stockOf(it) <= Number(it.reorder); });
+    var low = db.items.filter(function (it) { return !it.discontinued && stockOf(it) <= Number(it.reorder); });
     var pend = S.pendingTransfersFor(ui.branch);
     var dmgPend = pendingDamages(ui.branch);
     var purchPend = pendingPurchaseApprovals();
@@ -2282,7 +2282,7 @@
     var q = ui.q || '';
     if (!q) return '';
     var list = db.items.filter(function (it) {
-      return match(it.name, q) || match(it.sku, q) || match(it.category, q);
+      return !it.discontinued && (match(it.name, q) || match(it.sku, q) || match(it.category, q));
     }).slice(0, 12);
     if (!list.length) return '<div class="empty" style="border:0;background:transparent"><b>No match</b>Try another name or SKU.</div>';
     return list.map(function (it) {
@@ -2460,7 +2460,7 @@
     if (!sh.open) return '';
     var q = sh.q || '';
     var list = db.items.filter(function (it) {
-      return !q || match(it.name, q) || match(it.code, q) || match(it.cat, q);
+      return !it.discontinued && (!q || match(it.name, q) || match(it.code, q) || match(it.cat, q));
     });
     var selCount = itemSheetSelectedCount(sh.sel);
     var rows = list.length ? list.map(function (it) {
@@ -2978,14 +2978,14 @@
           else db.items.forEach(function (it) { if (it.category && cats.indexOf(it.category) < 0) cats.push(it.category); });
           return anyOpt('Any category').concat(pairs(cats.sort()));
         } },
-        { k: 'status', label: 'Stock here', t: 'sel', opts: function () { return anyOpt('Any stock').concat([['low', 'Low or out'], ['ok', 'Healthy']]); } },
+        { k: 'status', label: 'Stock here', t: 'sel', opts: function () { return anyOpt('Any stock').concat([['low', 'Low or out'], ['ok', 'Healthy'], ['discontinued', 'Discontinued']]); } },
         { k: 'min', label: 'Min price', t: 'num', ph: '0' },
         { k: 'max', label: 'Max price', t: 'num', ph: 'Any' }
       ],
       search: function (it) { return [it.name, it.sku, it.category, it.brand || ''].join(' '); },
       vals: function (it) {
         var here = stockOf(it), re = Number(it.reorder) || 0;
-        return { date: '', amount: it.price, category: it.category || '', status: here <= re ? 'low' : 'ok' };
+        return { date: '', amount: it.price, category: it.category || '', status: it.discontinued ? 'discontinued' : (here <= re ? 'low' : 'ok') };
       }
     },
     customers: {
@@ -4091,7 +4091,7 @@
     var q = String((pDraft && pDraft.q) || '').trim();
     if (!q) return '';
     var list = db.items.filter(function (it) {
-      return match(it.name, q) || match(it.sku, q) || match(it.category, q);
+      return !it.discontinued && (match(it.name, q) || match(it.sku, q) || match(it.category, q));
     }).slice(0, 7);
     if (!list.length) return '<div class="p-pick-empty">No item matches that. Check the spelling, or add the item in Items &amp; stock first.</div>';
     return list.map(function (it) {
@@ -4274,7 +4274,7 @@
     var q = String((pDraft && pDraft.q) || '').trim();
     if (!q) return;
     var list = db.items.filter(function (it) {
-      return match(it.name, q) || match(it.sku, q) || match(it.category, q);
+      return !it.discontinued && (match(it.name, q) || match(it.sku, q) || match(it.category, q));
     });
     if (!list.length) return toast('No item matches that name');
     pAddItem(list[0].id);
@@ -4389,7 +4389,7 @@
     if (!sh.open) return '';
     var q = sh.q || '';
     var list = db.items.filter(function (it) {
-      return !q || match(it.name, q) || match(it.code, q) || match(it.cat, q) || match(it.sku, q) || match(it.category, q);
+      return !it.discontinued && (!q || match(it.name, q) || match(it.code, q) || match(it.cat, q) || match(it.sku, q) || match(it.category, q));
     });
     var selCount = pItemSheetSelectedCount(sh.sel);
     var hideMoney = (typeof purchaseApprovalMode === 'function') && purchaseApprovalMode() && !(pDraft && (pDraft.approving || pDraft.editing));
@@ -4920,7 +4920,7 @@
     var q = String((ui.transfer && ui.transfer.q) || '').trim();
     if (!q) return '';
     var list = db.items.filter(function (it) {
-      return stockOf(it) > 0 && (match(it.name, q) || match(it.sku, q) || match(it.category, q));
+      return !it.discontinued && stockOf(it) > 0 && (match(it.name, q) || match(it.sku, q) || match(it.category, q));
     }).slice(0, 20);
     if (!list.length) return '<div class="empty" style="border:0;background:transparent"><b>No match</b>Nothing in stock matches that search.</div>';
     return list.map(function (it) {
@@ -5400,6 +5400,7 @@
     if (!S.isOwner()) return '';
     var totalQty = 0, totalAmt = 0;
     db.items.forEach(function (it) {
+      if (it.discontinued) return;
       var q = S.totalStock(it);
       totalQty = r2(totalQty + q);
       totalAmt = r2(totalAmt + r2(q * (Number(it.cost) || 0)));
@@ -5414,9 +5415,11 @@
     var open = ui.itemOpen ? itemById(ui.itemOpen) : null;
     if (open) return viewItemDetail(open);
     var st = fState('items'), n = fCount('items'), qv = st[fQKey('items')] || '';
+    var discView = st.status === 'discontinued';
+    var activeItemCount = db.items.filter(function (it) { return !it.discontinued; }).length;
     return `<div class="cust-page itm-page">
       <div class="cust-top">
-        <h2 class="cust-title">Items <span class="cust-count">${db.items.length}</span></h2>
+        <h2 class="cust-title">${discView ? 'Discontinued items' : 'Items'} <span class="cust-count">${discView ? db.items.length - activeItemCount : activeItemCount}</span></h2>
         <button type="button" class="cust-add" data-act="item-new">+ Add item</button>
       </div>
       <div class="cust-search">${ico('search')}
@@ -5438,18 +5441,24 @@
   }
 
   function itemListHTML() {
-    var list = fApply('items', db.items);
+    var st = fState('items');
+    var showDisc = st.status === 'discontinued';
+    var list = fApply('items', db.items).filter(function (it) {
+      return showDisc ? !!it.discontinued : !it.discontinued;
+    });
+    var activeCount = db.items.filter(function (it) { return !it.discontinued; }).length;
     if (!db.items.length) return `<div class="empty"><b>No items yet</b>Add your first item to start billing.</div>`;
-    if (!list.length) return `<div class="empty"><b>No items match</b>Try another search or clear a filter.</div>`;
+    if (!activeCount && !showDisc) return `<div class="empty"><b>Every item is discontinued</b>Discontinued items are hidden from the list and from new bills. Open Filters → Stock here → Discontinued to see them and bring one back.</div>`;
+    if (!list.length) return `<div class="empty"><b>${showDisc ? 'No discontinued items' : 'No items match'}</b>${showDisc ? 'Items you discontinue will appear here.' : 'Try another search or clear a filter.'}</div>`;
     return `<div class="cust-list itm-list">${list.map(function (it) {
       var scopeAll = itmAllOn();
-      var here = scopeAll ? S.totalStock(it) : stockOf(it), re = Number(it.reorder) || 0, all = S.totalStock(it);
+      var here = scopeAll ? S.totalStock(it) : stockOf(it), re = Number(it.reorder) || 0;
       var low = here <= re;
       var out = here <= 0;
       var sub = [it.sku, it.category].filter(Boolean).join(' · ') || 'No SKU';
-      return `<div class="cust-row itm-row" data-act="item-open" data-id="${it.id}" tabindex="0" role="button">
+      return `<div class="cust-row itm-row${it.discontinued ? ' is-discontinued' : ''}" data-act="item-open" data-id="${it.id}" tabindex="0" role="button">
         <span class="cust-main">
-          <span class="cust-name">${esc(it.name)}</span>
+          <span class="cust-name">${esc(it.name)}${it.discontinued ? ' <span class="itm-disc-tag">Discontinued</span>' : ''}</span>
           <span class="cust-sub">${esc(sub)}</span>
         </span>
         <span class="itm-meta">
@@ -5460,6 +5469,7 @@
         ${ui.itemMore === it.id ? `<div class="cust-menu cust-rowmenu">
           <button type="button" data-act="item-edit" data-id="${it.id}">Edit</button>
           <button type="button" data-act="item-adjust" data-id="${it.id}">Adjust</button>
+          <button type="button" data-act="item-toggle-disc" data-id="${it.id}">${it.discontinued ? 'Bring back' : 'Discontinue'}</button>
           <button type="button" class="danger" data-act="del-ask" data-kind="item" data-id="${it.id}">Delete</button>
         </div>` : ''}
       </div>`;
@@ -5644,8 +5654,9 @@
       <div class="grid2" style="margin:10px 0">
         <div class="card">
           <div class="sub">Item name</div>
-          <div class="itm-name">${esc(it.name)}</div>
+          <div class="itm-name">${esc(it.name)}${it.discontinued ? ' <span class="itm-disc-tag">Discontinued</span>' : ''}</div>
           <div class="sub" style="margin-top:2px">${esc([it.sku, it.category].filter(Boolean).join(' · ') || 'No SKU or category')}</div>
+          ${it.discontinued ? '<div class="hint" style="margin-top:8px;color:#b45309">This item is discontinued. It is hidden from the stock list and cannot be added to new bills or purchases.</div>' : ''}
           <div class="sub" style="margin-top:12px">Price</div>
           <div class="itm-stat">${money(it.price)}</div>
           ${showCost ? `<div class="sub" style="margin-top:6px">Cost ${money(it.cost||0)}</div>` : ''}
@@ -6857,6 +6868,8 @@
         return `<div class="field"><label>${esc(b.name)}</label>
           <input class="inp" type="text" inputmode="numeric" step="1" name="stock_${b.id}" value="${val}"${stockLock ? ' disabled' : ''}></div>`;
       }).join('')}</div>
+      <label class="check" style="margin-top:14px"><input type="checkbox" name="discontinued"${it && it.discontinued ? ' checked' : ''}> Discontinue this item</label>
+      <div class="hint" style="margin-top:4px">Discontinued items are hidden from the stock list and cannot be added to new bills or purchases. Past bills and records stay unchanged.</div>
       <div class="row-actions" style="justify-content:flex-end;margin-top:16px">
         <button class="btn" type="button" data-act="close-modal">Cancel</button>
         <button class="btn primary" type="submit">Save item</button>
@@ -9476,6 +9489,19 @@
     }
 
     if (action === 'item-edit') { ui.itemMore = ''; return itemModal(id); }
+    if (action === 'item-toggle-disc') {
+      var tgIt = itemById(id);
+      if (!tgIt) return;
+      tgIt.discontinued = !tgIt.discontinued;
+      ui.itemMore = '';
+      logActivity((tgIt.discontinued ? 'Stopped selling ' : 'Brought back ') + tgIt.name, 'item');
+      save(); render();
+      return toast(tgIt.discontinued
+        ? 'Discontinued — ' + tgIt.name + ' is out of the item list and new bills'
+        : tgIt.name + ' is back in the item list', { undo: {
+          label: 'Item brought back', run: function () { tgIt.discontinued = !tgIt.discontinued; }
+        } });
+    }
     if (action === 'item-del') {
       ui.itemMore = '';
       var delIt = itemById(id);
@@ -10066,7 +10092,8 @@
       var payload = {
         name: name,
         sku: String(data.sku || '').trim(),
-        category: String(data.category || '').trim()
+        category: String(data.category || '').trim(),
+        discontinued: !!data.discontinued
       };
       if (payload.category) {
         if (!Array.isArray(db.cats)) db.cats = [];
@@ -10088,14 +10115,15 @@
           id: uid(), name: name, sku: payload.sku, category: payload.category,
           price: can('price.edit') ? r2(Number(data.price) || 0) : 0,
           cost: can('price.edit') ? r2(Number(data.cost) || 0) : 0,
-          reorder: Number(data.reorder) || 0, stock: {}
+          reorder: Number(data.reorder) || 0, stock: {},
+          discontinued: !!data.discontinued
         };
         db.branches.forEach(function (b) {
           it.stock[b.id] = can('stock.edit') ? (Number(data['stock_' + b.id]) || 0) : 0;
         });
         db.items.push(it);
       }
-      logActivity((existing ? 'Edited item ' : 'Added item ') + name, 'item');
+      logActivity((existing ? 'Edited item ' : 'Added item ') + name + (payload.discontinued ? ' (discontinued)' : ''), 'item');
       if (ui.resumePurchaseAfterItem && typeof pDraft !== 'undefined' && pDraft && typeof purchaseModal === 'function') {
         ui.resumePurchaseAfterItem = false;
         save(); render(); closeModal();
@@ -10103,7 +10131,7 @@
         return toast('Item saved — back to purchase');
       }
       ui.resumePurchaseAfterItem = false;
-      save(); closeModal(); render(); return toast('Item saved');
+      save(); closeModal(); render(); return toast(payload.discontinued ? 'Item discontinued' : 'Item saved');
     }
 
     if (kind === 'customer') {

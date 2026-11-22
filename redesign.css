@@ -626,6 +626,8 @@
 
   /* item detail: name shown as a field, not a page header */
   .itm-name{font-size:15px;font-weight:650;line-height:1.35;margin-top:2px;color:var(--text);word-break:break-word}
+  .itm-disc-tag{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;font-size:10.5px;font-weight:600;line-height:1.4;vertical-align:middle;background:#f3f4f6;color:#6b7280;border:1px solid #e5e7eb}
+  .is-discontinued .itm-name{color:var(--muted)}
 
   /* item form: category suggestions */
   .cat-pick{margin-top:6px;font-size:11.5px;line-height:1.9;color:var(--muted)}

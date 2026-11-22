@@ -440,6 +440,7 @@ window.Store = (function () {
       }
       if (it.batches != null) delete it.batches;
       obj.branches.forEach(function (b) { if (it.stock[b.id] == null) it.stock[b.id] = 0; });
+      if (it.discontinued == null) it.discontinued = false;
     });
     obj.staff.forEach(function (s) {
       s.perms = Array.isArray(s.perms) ? s.perms : (ROLE_PERMS[s.role] || ROLE_PERMS.cashier).slice();
