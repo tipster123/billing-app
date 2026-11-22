@@ -9,7 +9,7 @@
   /* Which copy of the app is running. APP_VERSION only changes when the app
      files change (keep it in step with VERSION in sw.js and the ?v= strings in
      index.html); APP_BRANCH is the git branch this build came from. */
-  var APP_VERSION = 'v154';
+  var APP_VERSION = 'v155';
   var APP_BRANCH = 'newfix1';
 
   var db = null;
@@ -5443,15 +5443,22 @@
   function itemListHTML() {
     var st = fState('items');
     var showDisc = st.status === 'discontinued';
+    var scopeAll = itmAllOn();
     var list = fApply('items', db.items).filter(function (it) {
       return showDisc ? !!it.discontinued : !it.discontinued;
+    });
+    list = list.slice().sort(function (a, b) {
+      var aHere = scopeAll ? S.totalStock(a) : stockOf(a);
+      var bHere = scopeAll ? S.totalStock(b) : stockOf(b);
+      var aAvail = aHere > 0 ? 0 : 1;
+      var bAvail = bHere > 0 ? 0 : 1;
+      return aAvail - bAvail;
     });
     var activeCount = db.items.filter(function (it) { return !it.discontinued; }).length;
     if (!db.items.length) return `<div class="empty"><b>No items yet</b>Add your first item to start billing.</div>`;
     if (!activeCount && !showDisc) return `<div class="empty"><b>Every item is discontinued</b>Discontinued items are hidden from the list and from new bills. Open Filters → Stock here → Discontinued to see them and bring one back.</div>`;
     if (!list.length) return `<div class="empty"><b>${showDisc ? 'No discontinued items' : 'No items match'}</b>${showDisc ? 'Items you discontinue will appear here.' : 'Try another search or clear a filter.'}</div>`;
     return `<div class="cust-list itm-list">${list.map(function (it) {
-      var scopeAll = itmAllOn();
       var here = scopeAll ? S.totalStock(it) : stockOf(it), re = Number(it.reorder) || 0;
       var low = here <= re;
       var out = here <= 0;
